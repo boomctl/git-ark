@@ -99,6 +99,19 @@ enum HostAction {
         /// Name of the host to remove (as given to `host add`).
         name: String,
     },
+    /// Scan the local /24 for hosts answering on an SSH-shaped port — a
+    /// candidate list to feed into `host add <name> <candidate>`.
+    Discover {
+        /// Port to probe on every candidate host.
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// Per-host TCP connect timeout, in milliseconds.
+        #[arg(long, default_value_t = 300)]
+        timeout_ms: u64,
+        /// Subnet base to scan (its /24), overriding auto-detection.
+        #[arg(long)]
+        subnet: Option<std::net::Ipv4Addr>,
+    },
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -332,6 +345,11 @@ fn real_main() -> Result<()> {
             }),
             HostAction::List => hostcmd::host_list(),
             HostAction::Remove { name } => hostcmd::host_remove(&name),
+            HostAction::Discover {
+                port,
+                timeout_ms,
+                subnet,
+            } => hostcmd::host_discover(port, timeout_ms, subnet),
         },
         Cmd::Restore {
             repo,

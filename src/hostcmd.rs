@@ -605,6 +605,49 @@ pub fn host_remove(name: &str) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// host discover
+// ---------------------------------------------------------------------
+
+/// The `a.b.c` prefix of `ip`'s /24, for the empty-result message.
+fn base_prefix(ip: std::net::Ipv4Addr) -> String {
+    let o = ip.octets();
+    format!("{}.{}.{}", o[0], o[1], o[2])
+}
+
+/// Scan the local `/24` for hosts answering on `port`, printing each reachable
+/// `ip:port` — labeled `(known: <name>)` when the IP already appears in a
+/// registered host's `ssh_target`. Finding nothing is success (exit 0), not
+/// an error; a probe is a bare TCP connect, no auth, no data.
+pub fn host_discover(port: u16, timeout_ms: u64, subnet: Option<std::net::Ipv4Addr>) -> Result<()> {
+    let base = match subnet {
+        Some(b) => b,
+        None => crate::subnet::local_ipv4()
+            .context("could not determine the local IPv4 address; pass --subnet a.b.c.0")?,
+    };
+    let ips = crate::subnet::hosts_in_slash24(base);
+    let found =
+        crate::scan::scan_port(&ips, port, std::time::Duration::from_millis(timeout_ms), 64);
+
+    // Cross-reference the registry so already-added hosts are labeled.
+    let reg = Registry::load(&registry_path()?).unwrap_or_default();
+    if found.is_empty() {
+        println!(
+            "no hosts responding on port {port} in {}.0/24",
+            base_prefix(base)
+        );
+        return Ok(());
+    }
+    for ip in found {
+        let s = ip.to_string();
+        match reg.list().iter().find(|h| h.ssh_target.contains(&s)) {
+            Some(h) => println!("{s}:{port}  (known: {})", h.name),
+            None => println!("{s}:{port}"),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
