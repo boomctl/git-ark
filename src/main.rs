@@ -147,6 +147,16 @@ fn real_main() -> Result<()> {
             let github_branches: Vec<String> =
                 github.map(|g| g.branches.clone()).unwrap_or_default();
 
+            // Host-level disk line appended under the per-ref summary on every
+            // push. Informational only — a `df` error degrades silently (no
+            // line, never an error), never blocking the backup.
+            let disk_summary = || -> Option<String> {
+                let u = git_ark::disk::usage(&cfg.repos_root).ok()?;
+                let low =
+                    git_ark::disk::is_low(u, cfg.disk_warn_percent, cfg.disk_warn_min_free_bytes);
+                Some(git_ark::backup::disk_line(u, low))
+            };
+
             // Nothing durable to do — stays on the host, never loads secrets.
             // A hook-driven push still gets the per-ref summary (all NAS-only);
             // a manual `git-ark backup` (no stdin refs) has nothing to summarize.
@@ -158,6 +168,9 @@ fn real_main() -> Result<()> {
                         summarize_refs(&updated, effective_backup_refs, &github_branches)
                     )
                     .ok();
+                    if let Some(line) = disk_summary() {
+                        writeln!(stdout, "{line}").ok();
+                    }
                 }
                 return Ok(());
             }
@@ -214,6 +227,9 @@ fn real_main() -> Result<()> {
                     summarize_refs(&updated, effective_backup_refs, &github_branches)
                 )
                 .ok();
+                if let Some(line) = disk_summary() {
+                    writeln!(stdout, "{line}").ok();
+                }
             }
 
             Ok(())

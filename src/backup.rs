@@ -140,6 +140,30 @@ pub fn summarize_refs(
     lines.join("\n")
 }
 
+/// A host-level disk line for the push summary. `✓` when healthy, `⚠ … low`
+/// when the caller judged it low. Informational — never affects the backup.
+pub fn disk_line(usage: crate::disk::DiskUsage, low: bool) -> String {
+    let free = human_bytes(usage.free_bytes);
+    let pct = usage.percent_free();
+    if low {
+        format!("⚠ disk           {free} free ({pct}%) — running low")
+    } else {
+        format!("✓ disk           {free} free ({pct}%)")
+    }
+}
+
+/// Human-readable bytes, binary units, one decimal (e.g. "1.8 GB", "56.0 TB").
+fn human_bytes(n: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", U[i])
+}
+
 pub fn run_backup(
     cfg: &Config,
     repo: &Path,
@@ -347,6 +371,39 @@ mod bundle_selection_tests {
         repo_with_branches(d.path());
         let sel = resolve_bundle_refs(d.path(), &strs(&["ghost", "refs/tags/none"])).unwrap();
         assert_eq!(sel, BundleSelection::Refs(Vec::new()));
+    }
+}
+
+#[cfg(test)]
+mod disk_line_tests {
+    use super::*;
+    use crate::disk::DiskUsage;
+
+    #[test]
+    fn healthy_disk_line_uses_check_mark() {
+        let u = DiskUsage {
+            total_bytes: 56_000_000_000_000,
+            free_bytes: 55_000_000_000_000,
+        };
+        let line = disk_line(u, false);
+        assert!(line.starts_with("✓ disk"), "got: {line}");
+        assert!(line.contains("free"));
+    }
+
+    #[test]
+    fn low_disk_line_warns() {
+        let u = DiskUsage {
+            total_bytes: 20_000_000_000,
+            free_bytes: 1_000_000_000,
+        };
+        let line = disk_line(u, true);
+        assert!(line.starts_with("⚠ disk"), "got: {line}");
+        assert!(line.to_lowercase().contains("low"));
+    }
+
+    #[test]
+    fn human_bytes_formats_binary_units() {
+        assert_eq!(human_bytes(1_500_000_000), "1.4 GB");
     }
 }
 
