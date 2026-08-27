@@ -2,6 +2,7 @@ pub mod backup;
 pub mod clock;
 pub mod config;
 pub mod crypto;
+pub mod disk;
 pub mod git;
 pub mod github;
 pub mod hooks;
