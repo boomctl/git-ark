@@ -18,7 +18,11 @@ fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker build -q -t git-ark-testhost "$HERE" >/dev/null
-docker run -d --name "$NAME" -p "$PORT:22" git-ark-testhost >/dev/null
+# Optionally join a user-defined network (so it can reach a MinIO sidecar by
+# name) — set NETWORK to enable; the container is reachable there as `testhost`.
+net_args=()
+[ -n "${NETWORK:-}" ] && net_args=(--network "$NETWORK" --network-alias testhost)
+docker run -d --name "$NAME" -p "$PORT:22" "${net_args[@]}" git-ark-testhost >/dev/null
 
 # Authorize the test key for interactive login as `ark` (the control channel).
 docker exec "$NAME" bash -c 'mkdir -p /home/ark/.ssh && chmod 700 /home/ark/.ssh'
