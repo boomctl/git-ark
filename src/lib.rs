@@ -18,6 +18,7 @@ pub mod s3;
 #[cfg(unix)]
 pub mod shell;
 pub mod store;
+pub mod subnet;
 
 pub fn hello() -> &'static str {
     "git-ark"
