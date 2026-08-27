@@ -8,6 +8,10 @@ pub mod hooks;
 pub mod repo_policy;
 pub mod restore;
 pub mod s3;
+/// The SSH forced-command shim is a git *host* role and relies on a Unix
+/// `exec`; it is compiled only on Unix. Windows/macOS builds are client-only
+/// (restore and, ahead, the control-plane commands).
+#[cfg(unix)]
 pub mod shell;
 pub mod store;
 

@@ -10,6 +10,7 @@ use git_ark::github::{self, branches_to_mirror};
 use git_ark::repo_policy::{read_repo_policy, Visibility};
 use git_ark::restore::{list_versions, run_restore};
 use git_ark::s3::S3ObjectStore;
+#[cfg(unix)]
 use git_ark::shell::run_shell;
 
 #[derive(Parser)]
@@ -29,6 +30,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// SSH forced-command entry point (reads $SSH_ORIGINAL_COMMAND).
+    /// Host-only (Unix); absent from client-only Windows/macOS builds.
+    #[cfg(unix)]
     Shell,
     /// Run the backup pipeline for a repo (invoked by the post-receive hook).
     Backup { repo: PathBuf },
@@ -97,6 +100,7 @@ fn real_main() -> Result<()> {
     let cfg_path = config_path(&cli.config);
 
     match cli.cmd {
+        #[cfg(unix)]
         Cmd::Shell => {
             let cfg = Config::load(&cfg_path)?;
             let binary = std::env::current_exe().context("resolving own path")?;
