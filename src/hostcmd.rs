@@ -834,6 +834,92 @@ pub fn mirror_show() -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// routing — multi-host push fan-out
+// ---------------------------------------------------------------------
+
+/// The `git-ark-<name>:<repo>` push URL for each host in `host_names`, in
+/// order — one per host, keyed off the `~/.ssh/config` alias `host_add`
+/// installs (`Host git-ark-<name>`), so `ssh` resolves the rest.
+fn push_urls(host_names: &[String], repo: &str) -> Vec<String> {
+    host_names
+        .iter()
+        .map(|name| format!("git-ark-{name}:{repo}"))
+        .collect()
+}
+
+/// Run a `git remote` subcommand against `repo_path`, bailing with its
+/// stderr on failure.
+fn git_remote(repo_path: &Path, args: &[&str]) -> Result<()> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("remote")
+        .args(args)
+        .output()
+        .with_context(|| format!("spawning git remote {}", args.join(" ")))?;
+    if !out.status.success() {
+        bail!(
+            "git remote {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Fan a repo's `git push git-ark` out across `host_names`: verify every
+/// name is registered, then (re)materialize the `git-ark` remote in
+/// `repo_path` with one push URL per host, so a single `git push git-ark`
+/// reaches all of them. Idempotent — re-running (even with a different
+/// `host_names`) removes and rebuilds the remote rather than accumulating
+/// stale push URLs alongside new ones.
+pub fn route(repo_path: &Path, host_names: &[String]) -> Result<()> {
+    if host_names.is_empty() {
+        bail!("--to <names> is required (comma-separated host names)");
+    }
+
+    let registry = Registry::load(&registry_path()?)?;
+    let unknown: Vec<&String> = host_names
+        .iter()
+        .filter(|n| !registry.list().iter().any(|h| &h.name == *n))
+        .collect();
+    if !unknown.is_empty() {
+        let names: Vec<&str> = unknown.iter().map(|s| s.as_str()).collect();
+        bail!(
+            "unknown host(s): {} (run `git-ark host list` to see registered hosts)",
+            names.join(", ")
+        );
+    }
+
+    let repo = repo_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("{} has no usable directory name", repo_path.display()))?
+        .to_string();
+    let urls = push_urls(host_names, &repo);
+
+    // Remove any prior git-ark remote first — ignore failure (there may be
+    // none yet) — so re-routing never leaves a stale push URL alongside the
+    // fresh set.
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["remote", "remove", "git-ark"])
+        .output();
+
+    git_remote(repo_path, &["add", "git-ark", &urls[0]])?;
+    for url in &urls {
+        git_remote(repo_path, &["set-url", "--add", "--push", "git-ark", url])?;
+    }
+
+    println!(
+        "✓ {repo} → git push git-ark fans to: {}",
+        host_names.join(",")
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,5 +1261,17 @@ mod tests {
         let (demote, promote) = mirror_transition(&registry, "ec2");
         assert_eq!(demote, None);
         assert_eq!(promote, "ec2");
+    }
+
+    #[test]
+    fn push_urls_formats_one_git_ark_alias_url_per_host() {
+        let names = vec!["nas".to_string(), "ec2".to_string()];
+        assert_eq!(
+            push_urls(&names, "myrepo"),
+            vec![
+                "git-ark-nas:myrepo".to_string(),
+                "git-ark-ec2:myrepo".to_string(),
+            ]
+        );
     }
 }

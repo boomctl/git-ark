@@ -62,6 +62,17 @@ enum Cmd {
         #[command(subcommand)]
         action: MirrorAction,
     },
+    /// Fan a repo's `git push git-ark` out across hosts: (re)materializes a
+    /// multi-push-URL `git-ark` remote in the repo, so one push reaches all
+    /// of them.
+    Route {
+        /// Path to the repo whose `git-ark` remote to (re)materialize.
+        #[arg(default_value = ".")]
+        repo: PathBuf,
+        /// Comma-separated host names (from `host add`) to fan pushes out to.
+        #[arg(long, value_delimiter = ',')]
+        to: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -384,6 +395,12 @@ fn real_main() -> Result<()> {
             MirrorAction::Set { name } => hostcmd::mirror_set(&name),
             MirrorAction::Show => hostcmd::mirror_show(),
         },
+        Cmd::Route { repo, to } => {
+            if to.is_empty() {
+                anyhow::bail!("--to <names> is required (comma-separated host names)");
+            }
+            hostcmd::route(&repo, &to)
+        }
         Cmd::Restore {
             repo,
             version,
