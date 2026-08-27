@@ -184,6 +184,12 @@ pub fn forced_command_line(install_dir: &str, pubkey: &str) -> String {
     )
 }
 
+/// A host's effective S3 prefix: the base prefix namespaced by host name, so
+/// each host writes to its own subtree (independent 1:1 copies).
+pub fn per_host_prefix(base: &str, name: &str) -> String {
+    format!("{base}/{name}")
+}
+
 /// A client `~/.ssh/config` block wiring `git push git-ark-<name>:<repo>` to
 /// the host over the forced-command key.
 pub fn ssh_config_block(name: &str, host: &str, port: u16, user: &str, identity: &str) -> String {
@@ -413,6 +419,11 @@ mod tests {
         };
         let cfg = render_config("/home/ark/git-ark", "age1abc", &s3);
         assert!(!cfg.contains("endpoint"));
+    }
+
+    #[test]
+    fn per_host_prefix_namespaces_base_by_host_name() {
+        assert_eq!(per_host_prefix("git-ark", "nas"), "git-ark/nas");
     }
 
     #[test]

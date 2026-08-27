@@ -544,6 +544,12 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         identity: Some(key_path.clone()),
         triple: plan.triple.clone(),
         install_dir: plan.install_dir.clone(),
+        recipient: args.recipient.clone(),
+        bucket: args.bucket.clone(),
+        region: args.region.clone(),
+        prefix: args.prefix.clone(),
+        endpoint: args.endpoint.clone(),
+        mirror: false,
     });
     registry.save(&registry_path)?;
 
