@@ -26,8 +26,10 @@ jobs:
           # Hosts (also the Linux/WSL client): static musl, cross-compiled.
           - { target: x86_64-unknown-linux-musl,  os: ubuntu-latest,  cross: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest,  cross: true }
-          # Clients: built natively on their own runner.
-          - { target: x86_64-apple-darwin,        os: macos-13,       cross: false }
+          # Clients. Both macOS targets build on the Apple Silicon runner
+          # (macos-14) — it cross-compiles x86_64 natively via the universal SDK,
+          # so we never wait on the scarce, sunsetting Intel (macos-13) runners.
+          - { target: x86_64-apple-darwin,        os: macos-14,       cross: false }
           - { target: aarch64-apple-darwin,       os: macos-14,       cross: false }
           - { target: x86_64-pc-windows-msvc,     os: windows-latest, cross: false }
     steps:
