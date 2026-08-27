@@ -29,3 +29,7 @@ config.local.toml
 
 # Local agent / worktree scratch
 .claude/
+# SDD / planning scratch — design lives in docs/DESIGN.md; specs, plans, and
+# ledgers are local process artifacts and never belong in this OSS repo.
+docs/superpowers/
+.superpowers/
