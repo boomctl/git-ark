@@ -4,10 +4,11 @@
 
 Push to a box you already SSH into — a NAS, a VPS, any Linux host. `git-ark`
 auto-creates the repo on first push (no flags, no web UI), and fans every
-successful push out to durable, **client-side encrypted** storage in S3, plus an
-**optional** private GitHub mirror. The host that stores your code can never
-decrypt the backups, and the S3 credentials it holds can only *write* — never
-read, list, or delete.
+successful push out to durable, **client-side encrypted** storage in an S3
+bucket — AWS S3, or any S3-compatible store (MinIO, Cloudflare R2, Backblaze B2,
+…) — plus an **optional** private GitHub mirror. The host that stores your code
+can never decrypt the backups, and the object-store credentials it holds can
+only *write* — never read, list, or delete.
 
 A dead disk, a stolen box, or a fat-fingered `rm -rf` can't take everything.
 And nothing touches the public internet unless you opt a repo in by name.
@@ -21,13 +22,14 @@ real durability without publishing anything:
 
 - **Auto-create on push.** `git push git-ark:new-project` just works — the bare
   repo is created on first contact.
-- **Encrypted, always-on S3 backup.** Every push produces one self-contained
+- **Encrypted, always-on backup.** Every push produces one self-contained
   `git bundle` of the whole repo + history, encrypted with
   [age](https://age-encryption.org) to a key the host never holds, and uploaded
-  to S3.
-- **Write-only vault.** The host's S3 identity can `PutObject` and nothing else.
-  Retention is enforced by an S3 lifecycle rule, not by the host — so a
-  compromised host can't wipe your history.
+  to your object store (set `s3.endpoint` in `config.toml` for anything other
+  than AWS S3).
+- **Write-only vault.** The host's storage credential can `PutObject` and
+  nothing else. Retention is enforced by a bucket lifecycle rule, not by the
+  host — so a compromised host can't wipe your history.
 - **Opt-in private GitHub mirror.** A repo opts in by committing a
   `.git-ark.yml` with a `github:` block; on push it also mirrors the named
   branches to a private GitHub repo (created for you). Leave the file out and it

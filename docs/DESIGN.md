@@ -107,6 +107,14 @@ bucket versioning (plus optional Object Lock), a fully compromised host still
 can't read old backups, delete them, or ransomware the vault. Write-only in,
 key-holder-only out.
 
+The vault is **any S3-compatible object store** — AWS S3 by default, or MinIO,
+Cloudflare R2, Backblaze B2, Wasabi, etc. by setting `s3.endpoint` in
+`config.toml` (path-style addressing is selected automatically for a custom
+endpoint). The least-privilege, write-only property is illustrated here with an
+AWS IAM user; other stores express the same guarantee with their own scoped
+access keys. Only the AWS **provisioning** helper is AWS-specific — the storage
+path itself speaks plain S3 to whatever endpoint you point it at.
+
 ### Restore
 
 `git-ark restore` runs on a trusted machine that holds the age **private**
@@ -135,9 +143,11 @@ on the trusted restore machine — never on the host.
 ## Configuration
 
 - `config.toml` (non-secret) — repos root, the age **public** recipient, and the
-  S3 bucket/region/prefix. Human-edited; validated on load.
-- `secrets.toml` (`chmod 600`, gitignored) — the write-only AWS keys and any
-  GitHub tokens. Kept strictly separate from config, and never committed.
+  S3 bucket, region, prefix, and optional `endpoint` (point it at any
+  S3-compatible store; omit for AWS S3). Human-edited; validated on load.
+- `secrets.toml` (`chmod 600`, gitignored) — the write-only object-store access
+  keys and any GitHub tokens. Kept strictly separate from config, and never
+  committed.
 
 ## Client control plane (planned)
 

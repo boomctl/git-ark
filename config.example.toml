@@ -21,6 +21,10 @@ backup_refs = ["refs/heads/main", "refs/heads/master"]
 bucket = "git-ark-vault-example"
 region = "us-east-1"
 prefix = "git-ark"
+# Optional: point at any S3-compatible object store (MinIO, Cloudflare R2,
+# Backblaze B2, Wasabi, …). Omit for AWS S3. A custom endpoint uses path-style
+# addressing automatically.
+# endpoint = "https://s3.us-west-002.backblazeb2.com"
 # Object Lock (WORM) and history retention are configured bucket-side by
 # `scripts/provision.sh` (Object Lock at bucket creation + a lifecycle rule),
 # NOT here. There is no host-side toggle for it.
