@@ -196,11 +196,12 @@ fn ssh_mkdir_p(spec: &SshSpec, dirs: &[String]) -> Result<()> {
 // ---------------------------------------------------------------------
 
 /// Client-side git-ark state directory — per-host forced-command keypairs,
-/// and (absent a `GIT_ARK_HOSTS` override) the host registry. Colocated
-/// under `~/.ssh`: it's SSH key material, so that's where an operator
-/// already looks.
+/// and (absent a `GIT_ARK_HOSTS` override) the host registry. `~/.config/git-ark`:
+/// colocated with the other client-side state (the age `identity.txt`), and
+/// distinct from `~/.ssh` — a per-host key here is git-ark's own, not a
+/// general-purpose SSH identity an operator would expect to find in `~/.ssh`.
 fn client_dir(home: &Path) -> PathBuf {
-    home.join(".ssh").join("git-ark")
+    home.join(".config").join("git-ark")
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -568,10 +569,10 @@ mod tests {
     }
 
     #[test]
-    fn client_dir_is_under_dot_ssh() {
+    fn client_dir_is_under_config() {
         assert_eq!(
             client_dir(Path::new("/home/op")),
-            PathBuf::from("/home/op/.ssh/git-ark")
+            PathBuf::from("/home/op/.config/git-ark")
         );
     }
 
