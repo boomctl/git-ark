@@ -15,6 +15,13 @@ pub struct Config {
     /// every ref. Set to `["**"]` to back up every push.
     #[serde(default = "default_backup_refs")]
     pub backup_refs: Vec<String>,
+    /// Warn on the push summary when the repos filesystem is low. "Low" means
+    /// free% below `disk_warn_percent` AND free bytes below
+    /// `disk_warn_min_free_bytes` — see docs/DESIGN.md. Informational only.
+    #[serde(default = "default_disk_warn_percent")]
+    pub disk_warn_percent: u8,
+    #[serde(default = "default_disk_warn_min_free_bytes")]
+    pub disk_warn_min_free_bytes: u64,
 }
 
 fn default_backup_refs() -> Vec<String> {
@@ -22,6 +29,13 @@ fn default_backup_refs() -> Vec<String> {
         "refs/heads/main".to_string(),
         "refs/heads/master".to_string(),
     ]
+}
+
+fn default_disk_warn_percent() -> u8 {
+    15
+}
+fn default_disk_warn_min_free_bytes() -> u64 {
+    10 * 1024 * 1024 * 1024 // 10 GiB
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,6 +226,8 @@ region = "us-east-1"
                 "refs/heads/master".to_string()
             ]
         );
+        assert_eq!(c.disk_warn_percent, 15);
+        assert_eq!(c.disk_warn_min_free_bytes, 10 * 1024 * 1024 * 1024);
     }
 
     #[test]

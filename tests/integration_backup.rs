@@ -51,6 +51,8 @@ fn backup_uploads_encrypted_bundle_that_restores() {
         },
         github: GithubConfig::default(),
         backup_refs: Vec::new(),
+        disk_warn_percent: 15,
+        disk_warn_min_free_bytes: 10 * 1024 * 1024 * 1024,
     };
     let store = InMemoryStore::new();
     let clock = FixedClock("2026-08-26T17-40-11Z".into());
