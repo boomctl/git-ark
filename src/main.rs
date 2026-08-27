@@ -48,6 +48,8 @@ enum Cmd {
         #[arg(long)]
         identity: Option<PathBuf>,
     },
+    /// Report host health as `key=value` lines (for the client control plane).
+    Selfcheck,
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -232,6 +234,27 @@ fn real_main() -> Result<()> {
                 }
             }
 
+            Ok(())
+        }
+        Cmd::Selfcheck => {
+            let cfg = Config::load(&cfg_path)?; // validates → config_valid
+            println!("git_ark_version={}", env!("CARGO_PKG_VERSION"));
+            println!("repos_root={}", cfg.repos_root.display());
+            match git_ark::disk::usage(&cfg.repos_root) {
+                Ok(u) => {
+                    println!("disk_total_bytes={}", u.total_bytes);
+                    println!("disk_free_bytes={}", u.free_bytes);
+                    println!("disk_free_percent={}", u.percent_free());
+                    let low = git_ark::disk::is_low(
+                        u,
+                        cfg.disk_warn_percent,
+                        cfg.disk_warn_min_free_bytes,
+                    );
+                    println!("disk_low={low}");
+                }
+                Err(_) => println!("disk_free_bytes=unknown"),
+            }
+            println!("config_valid=true");
             Ok(())
         }
         Cmd::Restore {

@@ -186,3 +186,27 @@ fn mirror_without_token_fails_with_clear_message() {
         .failure()
         .stderr(contains("no github token"));
 }
+
+#[test]
+fn selfcheck_reports_parseable_health() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg,
+        "repos_root = \"/tmp\"\n\
+         age_recipient = \"age1qqqqexamplepublickeyxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n\
+         [s3]\nbucket = \"b\"\nregion = \"us-east-1\"\n",
+    )
+    .unwrap();
+    Command::cargo_bin("git-ark")
+        .unwrap()
+        .args(["selfcheck", "--config"])
+        .arg(&cfg)
+        .assert()
+        .success()
+        .stdout(
+            contains("git_ark_version=")
+                .and(contains("disk_free_bytes="))
+                .and(contains("config_valid=true")),
+        );
+}
