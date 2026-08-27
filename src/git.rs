@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
@@ -40,13 +40,46 @@ pub fn bundle_all(repo: &Path) -> Result<Vec<u8>> {
 /// Bundle exactly the named refs (`git bundle create - <ref1> <ref2> …`). A
 /// bundle of specific refs is a valid bundle: `git clone` of it yields those
 /// branches and nothing else, so a non-selected branch is genuinely not in it.
+///
+/// A bundle of specific refs carries no `HEAD` line, and `git clone` of a
+/// HEAD-less bundle checks out nothing — newer git leaves an empty working
+/// tree. So include `HEAD` when it points at one of the selected refs: the
+/// clone then checks out that (primary) branch, and because HEAD already
+/// resolves to a selected ref, no unselected branch's objects are pulled in.
+/// (When HEAD is detached or points at an unselected branch, HEAD is omitted
+/// and [`clone_bundle`]'s checkout fallback recovers content on restore.)
 pub fn bundle_refs(repo: &Path, refs: &[String]) -> Result<Vec<u8>> {
+    let mut spec: Vec<String> = Vec::with_capacity(refs.len() + 1);
+    if head_points_at_selected(repo, refs) {
+        spec.push("HEAD".to_string());
+    }
+    spec.extend(refs.iter().cloned());
+
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(repo)
         .args(["bundle", "create", "-"])
-        .args(refs);
+        .args(&spec);
     run(&mut cmd, "git bundle create")
+}
+
+/// Is the repo's `HEAD` a symbolic ref to one of `refs`? False when HEAD is
+/// detached, points elsewhere, or on any error. Used to decide whether HEAD can
+/// join a selected-ref bundle without dragging in an unselected branch.
+fn head_points_at_selected(repo: &Path, refs: &[String]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|head| {
+            let head = head.trim();
+            refs.iter().any(|r| r == head)
+        })
+        .unwrap_or(false)
 }
 
 /// Does `refname` resolve to an existing object in `repo`? Uses
@@ -66,6 +99,56 @@ pub fn clone_bundle(bundle: &Path, dest: &Path) -> Result<()> {
     run(
         Command::new("git").arg("clone").arg(bundle).arg(dest),
         "git clone <bundle>",
+    )?;
+    // A selected-ref bundle may carry no HEAD line; then `git clone` fetches the
+    // branches but checks nothing out (empty working tree on newer git). Ensure a
+    // branch is checked out so a restore is never a silently-empty directory.
+    ensure_checked_out(dest)?;
+    Ok(())
+}
+
+/// If the fresh clone at `dest` has no checked-out commit (HEAD-less bundle),
+/// check out a branch — preferring `main`/`master`, else the first fetched —
+/// so restore always yields real content instead of an empty working tree.
+fn ensure_checked_out(dest: &Path) -> Result<()> {
+    let has_head = Command::new("git")
+        .arg("-C")
+        .arg(dest)
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if has_head {
+        return Ok(());
+    }
+
+    // No checkout happened. The bundle's refs landed under refs/remotes/origin/*.
+    let listed = run(
+        Command::new("git").arg("-C").arg(dest).args([
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ]),
+        "git for-each-ref",
+    )?;
+    let listed = String::from_utf8_lossy(&listed);
+    let branches: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != "origin/HEAD")
+        .collect();
+    let pick = branches
+        .iter()
+        .find(|b| **b == "origin/main" || **b == "origin/master")
+        .or_else(|| branches.first())
+        .ok_or_else(|| anyhow!("restored bundle has no branch to check out"))?;
+    let local = pick.strip_prefix("origin/").unwrap_or(pick);
+    run(
+        Command::new("git")
+            .arg("-C")
+            .arg(dest)
+            .args(["checkout", "-b", local, pick]),
+        "git checkout",
     )?;
     Ok(())
 }
@@ -172,6 +255,28 @@ mod tests {
         assert!(
             !dest.join("on_feature.txt").exists(),
             "feature branch leaked into the bundle"
+        );
+    }
+
+    #[test]
+    fn bundle_of_non_head_branch_still_restores_content() {
+        // HEAD is on main, but we bundle ONLY feature — so the bundle has no
+        // usable HEAD line. Restore must still check the branch out (via the
+        // clone-side fallback), never leave an empty working tree.
+        let src = tempfile::tempdir().unwrap();
+        repo_with_two_branches(src.path()); // leaves HEAD on main
+
+        let bytes = bundle_refs(src.path(), &["refs/heads/feature".to_string()]).unwrap();
+        let bdir = tempfile::tempdir().unwrap();
+        let bpath = bdir.path().join("feature.bundle");
+        std::fs::write(&bpath, &bytes).unwrap();
+        let dest = bdir.path().join("clone");
+        clone_bundle(&bpath, &dest).unwrap();
+
+        // feature's own file is present — i.e. something was actually checked out.
+        assert_eq!(
+            std::fs::read_to_string(dest.join("on_feature.txt")).unwrap(),
+            "f"
         );
     }
 
