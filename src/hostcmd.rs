@@ -130,12 +130,15 @@ fn ssh_run_with_stdin(spec: &SshSpec, cmd: &str, input: &[u8]) -> Result<String>
 /// The remote shell command `ssh_pipe_file` runs: capture stdin to a temp
 /// file next to the target, `chmod` it, then atomically `mv` it into place —
 /// so a connection dropped mid-transfer never leaves a partial file at
-/// `remote_path`.
+/// `remote_path`. `umask 077` makes the staged temp file private from the
+/// moment it's created, rather than briefly world/group-readable under the
+/// remote's default umask until the explicit `chmod` lands — belt-and-
+/// suspenders for `secrets.toml`, harmless for the world-readable modes.
 fn pipe_file_command(remote_path: &str, mode: u32) -> String {
     let tmp = format!("{remote_path}.uploading");
     let remote_q = shell_words::quote(remote_path);
     let tmp_q = shell_words::quote(&tmp);
-    format!("cat > {tmp_q} && chmod {mode:o} {tmp_q} && mv {tmp_q} {remote_q}")
+    format!("umask 077; cat > {tmp_q} && chmod {mode:o} {tmp_q} && mv {tmp_q} {remote_q}")
 }
 
 /// Stream `bytes` to `remote_path` on the host, then `chmod mode`. Used for
@@ -146,11 +149,20 @@ pub fn ssh_pipe_file(spec: &SshSpec, remote_path: &str, bytes: &[u8], mode: u32)
     Ok(())
 }
 
-/// The remote shell command `ssh_append_unique` runs: append the line read
-/// from stdin to `remote_file`, but only when no existing line already
-/// contains `marker` — so re-running `host add` never duplicates the
-/// `authorized_keys` entry. Backs `remote_file` up to `<remote_file>.bak` the
-/// first time it's touched (never overwrites an existing backup).
+/// The remote shell command `ssh_append_unique` runs: remove any existing
+/// line containing `marker`, then append the line read from stdin — so
+/// re-running `host add` with the *same* key is a no-op (removed, then
+/// re-added, byte-identical) and re-running with a *rotated* key actually
+/// replaces the stale line instead of silently keeping it (skip-on-marker
+/// would leave a rotated forced-command key permanently unauthorized, since
+/// `marker` — `install_dir` — is present regardless of which pubkey the line
+/// carries). Backs `remote_file` up to `<remote_file>.bak` the first time
+/// it's touched (never overwrites an existing backup).
+///
+/// `grep -v` exits 1 when it filters everything out of a file (e.g. the file
+/// held only the stale line), so that step is deliberately decoupled from the
+/// `&&` chain with `|| true` — otherwise the very rotation case this is meant
+/// to fix would abort before the new line gets appended.
 ///
 /// `remote_file` is interpolated unquoted (as a bare `sh` assignment) so a
 /// leading `~` still tilde-expands — quoting it would suppress that. Every
@@ -160,8 +172,9 @@ fn append_unique_script(remote_file: &str, marker: &str) -> String {
     let marker_q = shell_words::quote(marker);
     format!(
         "f={remote_file}; d=$(dirname \"$f\"); mkdir -p \"$d\" && touch \"$f\" && \
-         line=\"$(cat)\" && if ! grep -qF {marker_q} \"$f\" 2>/dev/null; then \
-         [ -f \"$f.bak\" ] || cp \"$f\" \"$f.bak\"; printf '%s\\n' \"$line\" >> \"$f\"; fi"
+         line=\"$(cat)\" && {{ [ -f \"$f.bak\" ] || cp \"$f\" \"$f.bak\"; }} && \
+         {{ grep -vF {marker_q} \"$f\" > \"$f.tmp\" 2>/dev/null || true; }} && \
+         printf '%s\\n' \"$line\" >> \"$f.tmp\" && mv \"$f.tmp\" \"$f\""
     )
 }
 
@@ -179,6 +192,17 @@ pub fn ssh_append_unique(
         line.as_bytes(),
     )?;
     Ok(())
+}
+
+/// The remote selfcheck command: `<install_dir>/bin/git-ark selfcheck
+/// --config <install_dir>/config.toml`, both paths shell-quoted like every
+/// other remote command here — an unquoted `install_dir` containing a space
+/// (a spaced remote `$HOME`) would otherwise split apart and false-abort an
+/// otherwise-good host.
+fn selfcheck_command(install_dir: &str) -> String {
+    let bin_q = shell_words::quote(&format!("{install_dir}/bin/git-ark")).into_owned();
+    let cfg_q = shell_words::quote(&format!("{install_dir}/config.toml")).into_owned();
+    format!("{bin_q} selfcheck --config {cfg_q}")
 }
 
 /// `mkdir -p` one or more remote directories, each shell-quoted.
@@ -205,9 +229,14 @@ fn client_dir(home: &Path) -> PathBuf {
 }
 
 fn home_dir() -> Result<PathBuf> {
-    std::env::var("HOME")
+    if let Ok(home) = std::env::var("HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    // Windows sets USERPROFILE, not HOME — the client (unlike the host) is
+    // cross-platform, so fall back rather than erroring on every Windows run.
+    std::env::var("USERPROFILE")
         .map(PathBuf::from)
-        .context("HOME is not set")
+        .context("neither HOME nor USERPROFILE is set")
 }
 
 pub fn client_keydir() -> Result<PathBuf> {
@@ -240,8 +269,13 @@ fn drop_ssh_config_block<'a>(existing: &'a str, name: &str) -> Vec<&'a str> {
     while i < lines.len() {
         if lines[i].trim() == marker {
             i += 1;
-            // Drop the old block's body: everything up to the next `Host ` line.
-            while i < lines.len() && !lines[i].trim_start().starts_with("Host ") {
+            // Drop the old block's body: everything up to the next `Host `
+            // or `Match ` line — ssh_config stanzas are terminated by either
+            // (the trailing space also keeps this from matching `HostName`).
+            while i < lines.len()
+                && !lines[i].trim_start().starts_with("Host ")
+                && !lines[i].trim_start().starts_with("Match ")
+            {
                 i += 1;
             }
             continue;
@@ -309,11 +343,48 @@ pub struct HostAddArgs {
     pub binary: PathBuf,
 }
 
+/// Reject a `name` that isn't safe to use as a client keydir path component,
+/// an ssh alias (`Host git-ark-<name>`), and a registry key. Checked before
+/// any other work in `host_add` — unvalidated, `name` could walk
+/// `keydir.join(name)` outside `~/.config/git-ark` (e.g. `../../foo`) or emit
+/// a broken `Host git-ark-<name>` block.
+fn validate_host_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !ok {
+        bail!("host name {name:?} must match [A-Za-z0-9._-]+ (and not be `.` or `..`)");
+    }
+    Ok(())
+}
+
 /// Probe, wire, verify, and register a host. Fails before mutating anything
 /// on the host if the probe/capability check doesn't pass; re-running for
 /// the same `name` is idempotent (re-streams the binary/config, never
 /// duplicates the `authorized_keys`/`~/.ssh/config` entries).
 pub fn host_add(args: &HostAddArgs) -> Result<()> {
+    validate_host_name(&args.name)?;
+
+    // Host credentials, read first — before the probe or any ssh call — so a
+    // missing/empty cred aborts with the host completely untouched, rather
+    // than after dirs are created and the binary streamed.
+    let key_id = std::env::var("GIT_ARK_HOST_S3_KEY_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let secret = std::env::var("GIT_ARK_HOST_S3_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let (key_id, secret) = match (key_id, secret) {
+        (Some(k), Some(s)) => (k, s),
+        _ => bail!(
+            "GIT_ARK_HOST_S3_KEY_ID and GIT_ARK_HOST_S3_SECRET must both be set \
+             (the host's write-only S3 credential); nothing was written to the host"
+        ),
+    };
+
     let (user, host) = parse_target(&args.target)?;
     let spec = SshSpec {
         user: user.clone(),
@@ -398,12 +469,8 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
     )?;
 
     // 6. Stream config.toml and secrets.toml. The host's write-only S3
-    // credential comes from env — never argv, never printed.
-    let key_id = std::env::var("GIT_ARK_HOST_S3_KEY_ID")
-        .context("GIT_ARK_HOST_S3_KEY_ID is not set (the host's write-only S3 access key id)")?;
-    let secret = std::env::var("GIT_ARK_HOST_S3_SECRET").context(
-        "GIT_ARK_HOST_S3_SECRET is not set (the host's write-only S3 secret access key)",
-    )?;
+    // credential was read from env at the top of this fn — never argv,
+    // never printed.
     let s3 = S3Config {
         bucket: args.bucket.clone(),
         region: args.region.clone(),
@@ -425,20 +492,16 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         0o600,
     )?;
 
-    // 7. Install the forced-command key, idempotently (marker = install_dir,
-    // which is baked into the command= it's paired with).
+    // 7. Install the forced-command key, replacing any existing line for
+    // this install_dir (marker = install_dir, baked into the command= it's
+    // paired with) — so a rotated/regenerated key replaces the stale one
+    // instead of silently no-opping (see `append_unique_script`).
     let line = forced_command_line(&plan.install_dir, &pubkey);
     ssh_append_unique(&spec, "~/.ssh/authorized_keys", &line, &plan.install_dir)?;
 
     // 8. Verify. A failed/unhealthy selfcheck aborts here — the host is left
     // wired as-is (not rolled back) so the operator can inspect and re-run.
-    let selfcheck_out = ssh_run(
-        &spec,
-        &format!(
-            "{}/bin/git-ark selfcheck --config {}/config.toml",
-            plan.install_dir, plan.install_dir
-        ),
-    )?;
+    let selfcheck_out = ssh_run(&spec, &selfcheck_command(&plan.install_dir))?;
     let selfcheck = parse_kv(&selfcheck_out);
     let config_valid = selfcheck.get("config_valid").map(String::as_str) == Some("true");
     let version = selfcheck.get("git_ark_version");
@@ -609,7 +672,7 @@ mod tests {
     #[test]
     fn pipe_file_command_stages_then_atomically_moves() {
         let cmd = pipe_file_command("/home/ark/git-ark/bin/git-ark", 0o755);
-        assert!(cmd.starts_with("cat > "));
+        assert!(cmd.starts_with("umask 077; cat > "));
         assert!(cmd.contains("chmod 755"));
         assert!(cmd.contains("mv "));
         assert!(cmd.contains("/home/ark/git-ark/bin/git-ark.uploading"));
@@ -617,12 +680,92 @@ mod tests {
     }
 
     #[test]
-    fn append_unique_script_checks_marker_before_appending() {
+    fn append_unique_script_filters_marker_before_appending() {
         let script = append_unique_script("~/.ssh/authorized_keys", "/home/ark/git-ark");
         assert!(script.starts_with("f=~/.ssh/authorized_keys;"));
-        assert!(script.contains("grep -qF"));
+        // Replace semantics (grep -v), not skip-if-present (grep -q) — see
+        // append_unique_script_replaces_stale_line_on_key_rotation below for
+        // the behavior this enables.
+        assert!(script.contains("grep -vF"));
+        assert!(!script.contains("grep -qF"));
         assert!(script.contains("/home/ark/git-ark"));
         assert!(script.contains(".bak"));
+    }
+
+    /// Proves the S2 fix end to end at the shell level (not just the string
+    /// shape): a rotated key must evict the stale forced-command line, not
+    /// sit alongside it or leave it in place. Runs the generated script for
+    /// real against a temp file via `sh` — Unix-only (`sh` isn't reliably on
+    /// PATH on Windows; this doesn't run in CI there either, see ci.yml).
+    #[test]
+    #[cfg(unix)]
+    fn append_unique_script_replaces_stale_line_on_key_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("authorized_keys");
+        std::fs::write(&f, "ssh-rsa UNRELATED someone-else@laptop\n").unwrap();
+
+        let run = |line: &str| {
+            let script = append_unique_script(&f.display().to_string(), "/home/ark/git-ark");
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(line.as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        };
+
+        let old_line = "command=\"/home/ark/git-ark/bin/git-ark shell --config /home/ark/git-ark/config.toml\",no-pty ssh-ed25519 OLDKEY git-ark-testbox";
+        let new_line = "command=\"/home/ark/git-ark/bin/git-ark shell --config /home/ark/git-ark/config.toml\",no-pty ssh-ed25519 NEWKEY git-ark-testbox";
+
+        run(old_line);
+        let after_first = std::fs::read_to_string(&f).unwrap();
+        assert!(after_first.contains("OLDKEY"));
+        assert!(after_first.contains("UNRELATED"));
+
+        // Simulate rotation: same marker (install_dir), regenerated pubkey.
+        run(new_line);
+        let after_rotation = std::fs::read_to_string(&f).unwrap();
+        assert!(
+            after_rotation.contains("NEWKEY"),
+            "rotated key must be authorized"
+        );
+        assert!(
+            !after_rotation.contains("OLDKEY"),
+            "stale key must be evicted, not left authorized"
+        );
+        assert!(
+            after_rotation.contains("UNRELATED"),
+            "unrelated authorized_keys lines must be preserved"
+        );
+        assert_eq!(
+            after_rotation.matches("git-ark-testbox").count(),
+            1,
+            "must not duplicate the forced-command line"
+        );
+    }
+
+    #[test]
+    fn selfcheck_command_quotes_install_dir() {
+        let cmd = selfcheck_command("/home/ark/git ark");
+        assert!(cmd.contains("'/home/ark/git ark/bin/git-ark'"));
+        assert!(cmd.contains("--config"));
+        assert!(cmd.contains("'/home/ark/git ark/config.toml'"));
+    }
+
+    #[test]
+    fn selfcheck_command_has_expected_shape_without_special_chars() {
+        let cmd = selfcheck_command("/home/ark/git-ark");
+        assert_eq!(
+            cmd,
+            "/home/ark/git-ark/bin/git-ark selfcheck --config /home/ark/git-ark/config.toml"
+        );
     }
 
     #[test]
@@ -704,5 +847,54 @@ mod tests {
         let existing = "Host git-ark-testbox\n  HostName example.com\n  Port 2222\n";
         let out = remove_ssh_config_block(existing, "testbox");
         assert_eq!(out, "");
+    }
+
+    /// S1: an ssh_config stanza is terminated by `Host ` *or* `Match `. A
+    /// terminator that only recognized `Host ` would swallow a trailing
+    /// `Match` block into the dropped git-ark body and silently delete it.
+    #[test]
+    fn remove_ssh_config_block_preserves_trailing_match_block() {
+        let existing = "Host git-ark-box\n  HostName example.com\n  Port 22\n  User ark\n  IdentityFile /k\n  IdentitiesOnly yes\n\nMatch host *.corp\n  User alice\n";
+        let out = remove_ssh_config_block(existing, "box");
+        assert!(!out.contains("git-ark-box"));
+        assert!(out.contains("Match host *.corp"));
+        assert!(out.contains("User alice"));
+    }
+
+    #[test]
+    fn validate_host_name_accepts_ordinary_names() {
+        assert!(validate_host_name("testbox").is_ok());
+        assert!(validate_host_name("box-1.prod_east").is_ok());
+    }
+
+    #[test]
+    fn validate_host_name_rejects_path_traversal() {
+        assert!(validate_host_name("../../etc/passwd").is_err());
+        assert!(validate_host_name("..").is_err());
+        assert!(validate_host_name(".").is_err());
+    }
+
+    #[test]
+    fn validate_host_name_rejects_empty_and_unsafe_chars() {
+        assert!(validate_host_name("").is_err());
+        assert!(validate_host_name("box/name").is_err());
+        assert!(validate_host_name("box name").is_err());
+        assert!(validate_host_name("box$(rm)").is_err());
+    }
+
+    #[test]
+    fn home_dir_falls_back_to_userprofile_when_home_unset() {
+        let saved_home = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", "/Users/win");
+
+        let result = home_dir();
+
+        std::env::remove_var("USERPROFILE");
+        if let Some(home) = saved_home {
+            std::env::set_var("HOME", home);
+        }
+
+        assert_eq!(result.unwrap(), PathBuf::from("/Users/win"));
     }
 }
