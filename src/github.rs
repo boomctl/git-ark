@@ -44,6 +44,107 @@ fn api_err(e: ureq::Error) -> String {
     }
 }
 
+/// A token's access to the mirror's target GitHub repo, from `GET
+/// /repos/{owner}/{repo}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoAccess {
+    /// The repo exists; `push`/`admin` come from its `permissions` object.
+    Exists { push: bool, admin: bool },
+    /// `GET` 404'd — the repo doesn't exist yet (git-ark would create it).
+    Absent,
+    /// Anything else — a transport error or a non-404 status.
+    Error(String),
+}
+
+/// The result of preflighting a GitHub token against a repo's mirror config
+/// (`mirror check`): whether it authenticates, what it can see, and whether
+/// it can push `.github/workflows/` if the repo ships any.
+#[derive(Debug, Clone)]
+pub struct TokenCheck {
+    pub valid: bool,
+    pub login: Option<String>,
+    /// Classic PATs return their scopes in the `X-OAuth-Scopes` response
+    /// header; fine-grained PATs omit it entirely, which is why this is
+    /// `Option` rather than an empty `Vec` on the "can't tell" case.
+    pub scopes: Option<Vec<String>>,
+    pub repo: RepoAccess,
+    /// Whether the repo ships `.github/workflows/` — if so, pushing it needs
+    /// the `workflow` scope (classic) or Workflows:write (fine-grained).
+    pub needs_workflow: bool,
+}
+
+impl TokenCheck {
+    /// Whether the token's scopes include `workflow`. `None` when the scopes
+    /// couldn't be introspected at all (a fine-grained PAT) — distinct from
+    /// `Some(false)`, which is a real, checkable absence.
+    pub fn has_workflow_scope(&self) -> Option<bool> {
+        self.scopes
+            .as_ref()
+            .map(|s| s.iter().any(|x| x == "workflow"))
+    }
+}
+
+/// Preflight `token` against `owner/repo`: does it authenticate, what scopes
+/// does it carry (if introspectable), and what access does it have to the
+/// repo. Never returns an `Err` — a failed call surfaces as `valid: false` or
+/// `RepoAccess::Error` so the caller can report every check even when one of
+/// the two calls fails.
+pub fn check_token(token: &str, owner: &str, repo: &str, needs_workflow: bool) -> TokenCheck {
+    let (valid, login, scopes) = match with_headers(ureq::get(&format!("{API}/user")), token).call()
+    {
+        Ok(resp) => {
+            // The header must be read before `into_string()`, which consumes
+            // the response.
+            let scopes = resp.header("X-OAuth-Scopes").map(|h| {
+                h.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            });
+            let login = resp
+                .into_string()
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|json| {
+                    json.get("login")
+                        .and_then(|l| l.as_str())
+                        .map(str::to_string)
+                });
+            (true, login, scopes)
+        }
+        Err(_) => (false, None, None),
+    };
+
+    let repo_access =
+        match with_headers(ureq::get(&format!("{API}/repos/{owner}/{repo}")), token).call() {
+            Ok(resp) => {
+                let text = resp.into_string().unwrap_or_default();
+                let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                let push = json
+                    .get("permissions")
+                    .and_then(|p| p.get("push"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let admin = json
+                    .get("permissions")
+                    .and_then(|p| p.get("admin"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                RepoAccess::Exists { push, admin }
+            }
+            Err(ureq::Error::Status(404, _)) => RepoAccess::Absent,
+            Err(e) => RepoAccess::Error(api_err(e)),
+        };
+
+    TokenCheck {
+        valid,
+        login,
+        scopes,
+        repo: repo_access,
+        needs_workflow,
+    }
+}
+
 /// The JSON body for creating a repo. Extracted so its shape is unit-testable.
 fn create_body(repo_name: &str, private: bool) -> serde_json::Value {
     json!({ "name": repo_name, "private": private })
@@ -333,6 +434,45 @@ mod tests {
             scrubbed.contains("***"),
             "expected redaction marker: {scrubbed}"
         );
+    }
+
+    #[test]
+    fn has_workflow_scope_true_when_scope_present() {
+        let c = TokenCheck {
+            valid: true,
+            login: Some("me".to_string()),
+            scopes: Some(vec!["repo".to_string(), "workflow".to_string()]),
+            repo: RepoAccess::Absent,
+            needs_workflow: true,
+        };
+        assert_eq!(c.has_workflow_scope(), Some(true));
+    }
+
+    #[test]
+    fn has_workflow_scope_false_when_scope_missing() {
+        let c = TokenCheck {
+            valid: true,
+            login: Some("me".to_string()),
+            scopes: Some(vec!["repo".to_string()]),
+            repo: RepoAccess::Absent,
+            needs_workflow: true,
+        };
+        assert_eq!(c.has_workflow_scope(), Some(false));
+    }
+
+    #[test]
+    fn has_workflow_scope_none_when_scopes_uninspectable() {
+        // A fine-grained PAT gets no `X-OAuth-Scopes` header at all — that's
+        // un-introspectable, not "no scopes", so it must read `None` rather
+        // than `Some(false)` (which would wrongly read as a hard failure).
+        let c = TokenCheck {
+            valid: true,
+            login: Some("me".to_string()),
+            scopes: None,
+            repo: RepoAccess::Absent,
+            needs_workflow: true,
+        };
+        assert_eq!(c.has_workflow_scope(), None);
     }
 
     #[test]

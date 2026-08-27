@@ -10,11 +10,13 @@
 //! (keydir, registry path, `~/.ssh/config` upsert).
 
 use crate::config::S3Config;
+use crate::github;
 use crate::hostspec::{
     assess, forced_command_line, parse_probe, per_host_prefix, render_config, render_secrets,
     ssh_config_block, PROBE_SCRIPT,
 };
 use crate::registry::{Host, Registry};
+use crate::repo_policy::read_repo_policy;
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -920,6 +922,102 @@ pub fn route(repo_path: &Path, host_names: &[String]) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// mirror check — preflight the GitHub token against a repo's mirror config
+// ---------------------------------------------------------------------
+
+/// Whether `repo_path/.github/workflows` exists and has at least one entry —
+/// the signal that mirroring this repo needs the token's `workflow` scope
+/// (classic PAT) or Workflows:write (fine-grained).
+fn needs_workflow(repo_path: &Path) -> bool {
+    std::fs::read_dir(repo_path.join(".github").join("workflows"))
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+/// Format a `TokenCheck` as the report `mirror_check` prints: one line per
+/// check, `✗`-prefixed lines are hard failures.
+fn format_check(c: &github::TokenCheck, owner: &str, repo: &str) -> String {
+    let mut lines = Vec::new();
+
+    lines.push(if c.valid {
+        format!(
+            "✓ authenticates (login: {})",
+            c.login.as_deref().unwrap_or("?")
+        )
+    } else {
+        "✗ token does not authenticate".to_string()
+    });
+
+    lines.push(match &c.repo {
+        github::RepoAccess::Exists { admin: true, .. } => {
+            format!("✓ can administer {owner}/{repo}")
+        }
+        github::RepoAccess::Exists {
+            push: true,
+            admin: false,
+        } => format!("✓ can push {owner}/{repo} (no admin — ok if it already exists)"),
+        github::RepoAccess::Exists { push: false, .. } => {
+            format!("✗ no push access to {owner}/{repo}")
+        }
+        github::RepoAccess::Absent => format!(
+            "⚠ {owner}/{repo} absent — will be created on first mirror; verify create rights"
+        ),
+        github::RepoAccess::Error(e) => format!("✗ {owner}/{repo}: {e}"),
+    });
+
+    if c.needs_workflow {
+        lines.push(match c.has_workflow_scope() {
+            Some(true) => "✓ workflow scope".to_string(),
+            Some(false) => {
+                "✗ missing 'workflow' scope (needed to push .github/workflows/)".to_string()
+            }
+            None => "⚠ repo ships workflows; a fine-grained PAT needs Workflows:write (can't verify here)".to_string(),
+        });
+    }
+
+    lines.join("\n")
+}
+
+/// Preflight the GitHub token against a repo's mirror config: read the
+/// committed `.git-ark.yml` github block, check the token's auth/scopes and
+/// its access to the target repo, and print a report — catching a token
+/// lacking org access or the `workflow` scope before a real push does.
+pub fn mirror_check(repo_path: &Path) -> Result<()> {
+    let policy = read_repo_policy(repo_path)?;
+    let g = policy
+        .as_ref()
+        .and_then(|p| p.github.as_ref())
+        .filter(|g| g.enabled)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} has no enabled `github:` block in .git-ark.yml — nothing to check",
+                repo_path.display()
+            )
+        })?;
+    let repo_name = g.repo.clone().unwrap_or_else(|| {
+        repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+
+    let token = std::env::var("GIT_ARK_GITHUB_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("GIT_ARK_GITHUB_TOKEN must be set to run `mirror check`"))?;
+
+    let workflow = needs_workflow(repo_path);
+    let check = github::check_token(&token, &g.owner, &repo_name, workflow);
+    let report = format_check(&check, &g.owner, &repo_name);
+    println!("{report}");
+
+    if report.lines().any(|l| l.starts_with('✗')) {
+        bail!("mirror check found hard failures — see above");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1273,5 +1371,193 @@ mod tests {
                 "git-ark-ec2:myrepo".to_string(),
             ]
         );
+    }
+
+    // -----------------------------------------------------------------
+    // mirror check
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn needs_workflow_true_when_workflows_dir_has_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows = dir.path().join(".github").join("workflows");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(workflows.join("ci.yml"), "name: ci\n").unwrap();
+        assert!(needs_workflow(dir.path()));
+    }
+
+    #[test]
+    fn needs_workflow_false_when_workflows_dir_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".github").join("workflows")).unwrap();
+        assert!(!needs_workflow(dir.path()));
+    }
+
+    #[test]
+    fn needs_workflow_false_when_no_github_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!needs_workflow(dir.path()));
+    }
+
+    fn token_check(
+        valid: bool,
+        repo: github::RepoAccess,
+        scopes: Option<Vec<&str>>,
+        needs_workflow: bool,
+    ) -> github::TokenCheck {
+        github::TokenCheck {
+            valid,
+            login: if valid { Some("me".to_string()) } else { None },
+            scopes: scopes.map(|s| s.into_iter().map(str::to_string).collect()),
+            repo,
+            needs_workflow,
+        }
+    }
+
+    #[test]
+    fn format_check_reports_failed_auth() {
+        let c = token_check(false, github::RepoAccess::Absent, None, false);
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✗ token does not authenticate"));
+    }
+
+    #[test]
+    fn format_check_reports_successful_auth_with_login() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            None,
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✓ authenticates (login: me)"));
+    }
+
+    #[test]
+    fn format_check_repo_admin() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            None,
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✓ can administer acme/app"));
+    }
+
+    #[test]
+    fn format_check_repo_push_without_admin() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: false,
+            },
+            None,
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✓ can push acme/app"));
+        assert!(out.contains("no admin"));
+    }
+
+    #[test]
+    fn format_check_repo_no_push() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: false,
+                admin: false,
+            },
+            None,
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✗ no push access to acme/app"));
+    }
+
+    #[test]
+    fn format_check_repo_absent() {
+        let c = token_check(true, github::RepoAccess::Absent, None, false);
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("⚠ acme/app absent"));
+    }
+
+    #[test]
+    fn format_check_repo_error() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Error("HTTP 403".to_string()),
+            None,
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✗ acme/app: HTTP 403"));
+    }
+
+    #[test]
+    fn format_check_omits_workflow_line_when_not_needed() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            Some(vec!["repo"]),
+            false,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(!out.contains("workflow"));
+    }
+
+    #[test]
+    fn format_check_workflow_scope_present() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            Some(vec!["repo", "workflow"]),
+            true,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✓ workflow scope"));
+    }
+
+    #[test]
+    fn format_check_workflow_scope_missing() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            Some(vec!["repo"]),
+            true,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("✗ missing 'workflow' scope"));
+    }
+
+    #[test]
+    fn format_check_workflow_scope_uninspectable() {
+        let c = token_check(
+            true,
+            github::RepoAccess::Exists {
+                push: true,
+                admin: true,
+            },
+            None,
+            true,
+        );
+        let out = format_check(&c, "acme", "app");
+        assert!(out.contains("⚠ repo ships workflows"));
     }
 }

@@ -143,6 +143,14 @@ enum MirrorAction {
     Set { name: String },
     /// Print the current mirror host's name, or `none`.
     Show,
+    /// Preflight `GIT_ARK_GITHUB_TOKEN` against a repo's `.git-ark.yml`
+    /// github block — catches a token lacking org access or the `workflow`
+    /// scope before a real push does.
+    Check {
+        /// Path to the repo to check (default: the current directory).
+        #[arg(default_value = ".")]
+        repo: PathBuf,
+    },
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -394,6 +402,7 @@ fn real_main() -> Result<()> {
         Cmd::Mirror { action } => match action {
             MirrorAction::Set { name } => hostcmd::mirror_set(&name),
             MirrorAction::Show => hostcmd::mirror_show(),
+            MirrorAction::Check { repo } => hostcmd::mirror_check(&repo),
         },
         Cmd::Route { repo, to } => {
             if to.is_empty() {
