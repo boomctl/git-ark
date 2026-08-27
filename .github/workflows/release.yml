@@ -1,0 +1,109 @@
+name: Release
+
+# Cut a release either by pushing a v* tag, or by running this workflow manually
+# (Actions → Release → Run workflow) with a version — the manual path exists
+# because git-ark's own GitHub mirror pushes branches, not tags.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to cut (e.g. v0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Hosts (also the Linux/WSL client): static musl, cross-compiled.
+          - { target: x86_64-unknown-linux-musl,  os: ubuntu-latest,  cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest,  cross: true }
+          # Clients: built natively on their own runner.
+          - { target: x86_64-apple-darwin,        os: macos-13,       cross: false }
+          - { target: aarch64-apple-darwin,       os: macos-14,       cross: false }
+          - { target: x86_64-pc-windows-msvc,     os: windows-latest, cross: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add target (native builds)
+        if: ${{ !matrix.cross }}
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (musl targets)
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          name="git-ark-${{ matrix.target }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/git-ark.exe" "dist/${name}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/git-ark" "dist/${name}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum git-ark-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Resolve tag
+        id: v
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.v.outputs.tag }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" dist/* \
+              --repo "${{ github.repository }}" \
+              --title "$tag" \
+              --generate-notes
+          fi
