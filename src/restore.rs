@@ -54,17 +54,33 @@ mod tests {
         use std::process::Command;
         let id = age::x25519::Identity::generate();
         let work = tempfile::tempdir().unwrap();
-        let g = |a: &[&str]| { assert!(Command::new("git").args(a).current_dir(work.path()).status().unwrap().success()); };
-        g(&["init", "-q"]); g(&["config","user.email","t@t"]); g(&["config","user.name","t"]);
+        let g = |a: &[&str]| {
+            assert!(Command::new("git")
+                .args(a)
+                .current_dir(work.path())
+                .status()
+                .unwrap()
+                .success());
+        };
+        g(&["init", "-q"]);
+        g(&["config", "user.email", "t@t"]);
+        g(&["config", "user.name", "t"]);
         std::fs::write(work.path().join("f.txt"), "hi").unwrap();
-        g(&["add","."]); g(&["commit","-qm","c"]);
+        g(&["add", "."]);
+        g(&["commit", "-qm", "c"]);
         let bundle = crate::git::bundle_all(work.path()).unwrap();
         let ct = crate::crypto::encrypt(&id.to_public().to_string(), &bundle).unwrap();
         let store = InMemoryStore::new();
         store.put("git-ark/app/latest.age", &ct).unwrap();
-        store.put("git-ark/app/history/2026-08-26T00-00-00Z.age", &ct).unwrap();
+        store
+            .put("git-ark/app/history/2026-08-26T00-00-00Z.age", &ct)
+            .unwrap();
         use age::secrecy::ExposeSecret;
-        (store, id.to_string().expose_secret().to_string(), "app".to_string())
+        (
+            store,
+            id.to_string().expose_secret().to_string(),
+            "app".to_string(),
+        )
     }
 
     #[test]

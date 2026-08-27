@@ -62,7 +62,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let repo = d.path().join("x.git");
         std::fs::create_dir_all(repo.join("hooks")).unwrap();
-        install_post_receive(&repo, Path::new("/opt/git-ark/bin/git-ark"), Path::new("/opt/git-ark/config.toml")).unwrap();
+        install_post_receive(
+            &repo,
+            Path::new("/opt/git-ark/bin/git-ark"),
+            Path::new("/opt/git-ark/config.toml"),
+        )
+        .unwrap();
         let hook = repo.join("hooks/post-receive");
         assert!(hook.exists());
         let mode = std::fs::metadata(&hook).unwrap().permissions().mode() & 0o777;
@@ -77,8 +82,10 @@ mod tests {
             Path::new("/opt/git-ark/config.toml"),
         );
         // The dangerous path must appear fully single-quoted, so sh can't substitute.
-        assert!(s.contains("'/srv/repos/x$(touch /tmp/pwned).git'"),
-            "metachar path must be single-quoted; got:\n{s}");
+        assert!(
+            s.contains("'/srv/repos/x$(touch /tmp/pwned).git'"),
+            "metachar path must be single-quoted; got:\n{s}"
+        );
     }
 
     #[test]
@@ -89,7 +96,9 @@ mod tests {
             Path::new("/opt/git-ark/config.toml"),
         );
         // Embedded single quote becomes '\'' inside the quoting.
-        assert!(s.contains(r"'/srv/repos/a'\''b.git'"),
-            "embedded single quote must be escaped as '\\''; got:\n{s}");
+        assert!(
+            s.contains(r"'/srv/repos/a'\''b.git'"),
+            "embedded single quote must be escaped as '\\''; got:\n{s}"
+        );
     }
 }

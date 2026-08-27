@@ -70,8 +70,8 @@ fn owner_is_org(token: &str, owner: &str) -> Result<bool> {
     let text = resp
         .into_string()
         .map_err(|_| anyhow!("reading GitHub owner {owner} response"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|_| anyhow!("parsing GitHub owner {owner} response"))?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| anyhow!("parsing GitHub owner {owner} response"))?;
     Ok(json.get("type").and_then(|t| t.as_str()) == Some("Organization"))
 }
 
@@ -286,7 +286,8 @@ mod tests {
         }
         // The push URL is present and tokenless.
         assert!(
-            args.iter().any(|a| a == "https://github.com/some-org/custom-name.git"),
+            args.iter()
+                .any(|a| a == "https://github.com/some-org/custom-name.git"),
             "expected tokenless push URL in argv, got {args:?}"
         );
 
@@ -320,11 +321,18 @@ mod tests {
         // A stderr line that literally embeds the token (as git could if it
         // echoed the extraheader) must come back with the token gone and the
         // redaction marker present.
-        let raw =
-            format!("fatal: unable to access repo: Authorization: Bearer {TOKEN} — bad credentials");
+        let raw = format!(
+            "fatal: unable to access repo: Authorization: Bearer {TOKEN} — bad credentials"
+        );
         let scrubbed = scrub_token(&raw, TOKEN);
-        assert!(!scrubbed.contains(TOKEN), "token survived scrub: {scrubbed}");
-        assert!(scrubbed.contains("***"), "expected redaction marker: {scrubbed}");
+        assert!(
+            !scrubbed.contains(TOKEN),
+            "token survived scrub: {scrubbed}"
+        );
+        assert!(
+            scrubbed.contains("***"),
+            "expected redaction marker: {scrubbed}"
+        );
     }
 
     #[test]

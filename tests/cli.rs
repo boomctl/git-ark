@@ -3,7 +3,11 @@ use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 /// Build a bare repo under `root` containing a committed `.git-ark.yml`.
-fn bare_repo_with_policy(root: &std::path::Path, name: &str, policy_yaml: &str) -> std::path::PathBuf {
+fn bare_repo_with_policy(
+    root: &std::path::Path,
+    name: &str,
+    policy_yaml: &str,
+) -> std::path::PathBuf {
     use std::process::Command as Sys;
     let work = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
@@ -23,7 +27,12 @@ fn bare_repo_with_policy(root: &std::path::Path, name: &str, policy_yaml: &str) 
     git(&["commit", "-qm", "policy"]);
     let bare = root.join(name);
     assert!(Sys::new("git")
-        .args(["clone", "--bare", work.path().to_str().unwrap(), bare.to_str().unwrap()])
+        .args([
+            "clone",
+            "--bare",
+            work.path().to_str().unwrap(),
+            bare.to_str().unwrap()
+        ])
         .status()
         .unwrap()
         .success());
@@ -32,15 +41,27 @@ fn bare_repo_with_policy(root: &std::path::Path, name: &str, policy_yaml: &str) 
 
 #[test]
 fn shows_help() {
-    Command::cargo_bin("git-ark").unwrap()
-        .arg("--help").assert().success().stdout(contains("backup"));
+    Command::cargo_bin("git-ark")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("backup"));
 }
 
 #[test]
 fn backup_without_config_fails_loud() {
-    Command::cargo_bin("git-ark").unwrap()
-        .args(["backup", "/no/such/repo.git", "--config", "/no/such/config.toml"])
-        .assert().failure().stderr(contains("config"));
+    Command::cargo_bin("git-ark")
+        .unwrap()
+        .args([
+            "backup",
+            "/no/such/repo.git",
+            "--config",
+            "/no/such/config.toml",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("config"));
 }
 
 #[test]

@@ -29,12 +29,18 @@ mod tests {
     use super::*;
     #[test]
     fn fixed_clock_returns_its_value() {
-        assert_eq!(FixedClock("2026-01-02T03-04-05Z".into()).timestamp(), "2026-01-02T03-04-05Z");
+        assert_eq!(
+            FixedClock("2026-01-02T03-04-05Z".into()).timestamp(),
+            "2026-01-02T03-04-05Z"
+        );
     }
     #[test]
     fn system_clock_is_safe_and_zulu() {
         let t = SystemClock.timestamp();
         assert!(t.ends_with('Z'));
-        assert!(!t.contains(':'), "colons are avoided for key/filename safety");
+        assert!(
+            !t.contains(':'),
+            "colons are avoided for key/filename safety"
+        );
     }
 }

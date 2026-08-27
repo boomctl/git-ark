@@ -3,9 +3,7 @@ use clap::{Parser, Subcommand};
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 
-use git_ark::backup::{
-    parse_receive_refs, repo_name, run_backup, should_back_up, summarize_refs,
-};
+use git_ark::backup::{parse_receive_refs, repo_name, run_backup, should_back_up, summarize_refs};
 use git_ark::clock::SystemClock;
 use git_ark::config::{Config, Secrets};
 use git_ark::github::{self, branches_to_mirror};
@@ -15,7 +13,11 @@ use git_ark::s3::S3ObjectStore;
 use git_ark::shell::run_shell;
 
 #[derive(Parser)]
-#[command(name = "git-ark", version, about = "Write-only backup vault fronting your git host")]
+#[command(
+    name = "git-ark",
+    version,
+    about = "Write-only backup vault fronting your git host"
+)]
 struct Cli {
     /// Path to config.toml (default: $GIT_ARK_CONFIG or ~/git-ark/config.toml)
     #[arg(long, global = true)]
@@ -162,7 +164,14 @@ fn real_main() -> Result<()> {
             if do_s3 {
                 let store = S3ObjectStore::new(&cfg.s3, &secrets.aws)?;
                 let clock = SystemClock;
-                run_backup(&cfg, &repo, effective_backup_refs, &store, &clock, &mut stdout)?;
+                run_backup(
+                    &cfg,
+                    &repo,
+                    effective_backup_refs,
+                    &store,
+                    &clock,
+                    &mut stdout,
+                )?;
             }
 
             if let Some(g) = github {
@@ -205,7 +214,13 @@ fn real_main() -> Result<()> {
 
             Ok(())
         }
-        Cmd::Restore { repo, version, list, dest, identity } => {
+        Cmd::Restore {
+            repo,
+            version,
+            list,
+            dest,
+            identity,
+        } => {
             let cfg = Config::load(&cfg_path)?;
             let secrets = Secrets::load(&secrets_path(&cfg_path))?;
             let store = S3ObjectStore::new(&cfg.s3, &secrets.aws)?;
@@ -218,7 +233,10 @@ fn real_main() -> Result<()> {
             let id_path = identity.context("--identity <age key file> is required to restore")?;
             let id = std::fs::read_to_string(&id_path)
                 .with_context(|| format!("reading identity {}", id_path.display()))?;
-            let id = id.lines().find(|l| l.starts_with("AGE-SECRET-KEY-")).unwrap_or(id.trim());
+            let id = id
+                .lines()
+                .find(|l| l.starts_with("AGE-SECRET-KEY-"))
+                .unwrap_or(id.trim());
             let clone = run_restore(&store, id, &cfg.s3.prefix, &repo, version.as_deref(), &dest)?;
             println!("restored → {}", clone.display());
             Ok(())

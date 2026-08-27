@@ -6,7 +6,12 @@ use git_ark::store::{InMemoryStore, ObjectStore};
 use std::process::Command;
 
 fn git(work: &std::path::Path, args: &[&str]) {
-    assert!(Command::new("git").args(args).current_dir(work).status().unwrap().success());
+    assert!(Command::new("git")
+        .args(args)
+        .current_dir(work)
+        .status()
+        .unwrap()
+        .success());
 }
 
 #[test]
@@ -25,12 +30,25 @@ fn backup_uploads_encrypted_bundle_that_restores() {
     git(work.path(), &["add", "."]);
     git(work.path(), &["commit", "-qm", "c"]);
     let repo = root.path().join("proj.git");
-    assert!(Command::new("git").args(["clone", "--bare", work.path().to_str().unwrap(), repo.to_str().unwrap()]).status().unwrap().success());
+    assert!(Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            work.path().to_str().unwrap(),
+            repo.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     let cfg = Config {
         repos_root: root.path().to_path_buf(),
         age_recipient: recipient,
-        s3: S3Config { bucket: "b".into(), region: "us-east-1".into(), prefix: "git-ark".into() },
+        s3: S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+            prefix: "git-ark".into(),
+        },
         github: GithubConfig::default(),
         backup_refs: Vec::new(),
     };
@@ -43,7 +61,9 @@ fn backup_uploads_encrypted_bundle_that_restores() {
 
     // Both objects exist.
     let latest = store.get("git-ark/proj/latest.age").unwrap();
-    let hist = store.get("git-ark/proj/history/2026-08-26T17-40-11Z.age").unwrap();
+    let hist = store
+        .get("git-ark/proj/history/2026-08-26T17-40-11Z.age")
+        .unwrap();
     assert_eq!(latest, hist);
 
     // The encrypted bundle decrypts and clones back to the same content.
@@ -53,7 +73,10 @@ fn backup_uploads_encrypted_bundle_that_restores() {
     std::fs::write(&bpath, &bundle).unwrap();
     let dest = bdir.path().join("clone");
     git_ark::git::clone_bundle(&bpath, &dest).unwrap();
-    assert_eq!(std::fs::read_to_string(dest.join("f.txt")).unwrap(), "payload");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("f.txt")).unwrap(),
+        "payload"
+    );
 
     // Progress was emitted.
     let log = String::from_utf8(out).unwrap();

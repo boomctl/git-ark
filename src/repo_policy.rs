@@ -128,7 +128,12 @@ mod tests {
         let bare = dir.path().join("r.git");
         let g = |args: &[&str], cwd: &std::path::Path| {
             assert!(
-                Command::new("git").args(args).current_dir(cwd).status().unwrap().success(),
+                Command::new("git")
+                    .args(args)
+                    .current_dir(cwd)
+                    .status()
+                    .unwrap()
+                    .success(),
                 "git {args:?}"
             );
         };
@@ -140,11 +145,20 @@ mod tests {
         g(&["add", "."], &work);
         g(&["commit", "-qm", "policy"], &work);
         assert!(Command::new("git")
-            .args(["clone", "--bare", work.to_str().unwrap(), bare.to_str().unwrap()])
-            .status().unwrap().success());
+            .args([
+                "clone",
+                "--bare",
+                work.to_str().unwrap(),
+                bare.to_str().unwrap()
+            ])
+            .status()
+            .unwrap()
+            .success());
         // Reproduce the bug: HEAD points at an unborn `master`, content is on `main`.
         g(&["symbolic-ref", "HEAD", "refs/heads/master"], &bare);
-        let policy = read_repo_policy(&bare).unwrap().expect("policy found via main");
+        let policy = read_repo_policy(&bare)
+            .unwrap()
+            .expect("policy found via main");
         assert_eq!(policy.backup_refs, vec!["main".to_string()]);
     }
 
@@ -183,7 +197,11 @@ github:
         assert!(p.backup_refs.is_empty());
         let g = p.github.unwrap();
         assert!(g.enabled, "enabled defaults to true");
-        assert_eq!(g.visibility, Visibility::Private, "visibility defaults to private");
+        assert_eq!(
+            g.visibility,
+            Visibility::Private,
+            "visibility defaults to private"
+        );
         assert_eq!(g.owner, "someone");
         assert_eq!(g.repo, None);
         assert!(g.branches.is_empty());

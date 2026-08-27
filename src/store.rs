@@ -21,7 +21,10 @@ impl InMemoryStore {
 
 impl ObjectStore for InMemoryStore {
     fn put(&self, key: &str, body: &[u8]) -> Result<()> {
-        self.inner.lock().unwrap().insert(key.to_string(), body.to_vec());
+        self.inner
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), body.to_vec());
         Ok(())
     }
     fn get(&self, key: &str) -> Result<Vec<u8>> {

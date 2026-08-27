@@ -188,7 +188,10 @@ mod tests {
             Some(false)
         );
         // Multipart / SSE-KMS ETags are not 32-hex → unverifiable (None).
-        assert_eq!(etag_matches("\"d41d8cd98f00b204e9800998ecf8427e-2\"", b"hello"), None);
+        assert_eq!(
+            etag_matches("\"d41d8cd98f00b204e9800998ecf8427e-2\"", b"hello"),
+            None
+        );
         assert_eq!(etag_matches("not-a-hash", b"hello"), None);
     }
 }

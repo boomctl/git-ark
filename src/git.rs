@@ -5,7 +5,10 @@ use std::process::Command;
 fn run(cmd: &mut Command, what: &str) -> Result<Vec<u8>> {
     let out = cmd.output().with_context(|| format!("spawning {what}"))?;
     if !out.status.success() {
-        bail!("{what} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "{what} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(out.stdout)
 }
@@ -74,7 +77,12 @@ mod tests {
 
     fn commit_a_file(work: &std::path::Path) {
         let sh = |args: &[&str]| {
-            let ok = Command::new("git").args(args).current_dir(work).status().unwrap().success();
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(work)
+                .status()
+                .unwrap()
+                .success();
             assert!(ok, "git {:?} failed", args);
         };
         sh(&["init", "-q"]);
@@ -100,7 +108,10 @@ mod tests {
         let out = tempfile::tempdir().unwrap();
         let dest = out.path().join("clone");
         clone_bundle(&bpath, &dest).unwrap();
-        assert_eq!(std::fs::read_to_string(dest.join("hello.txt")).unwrap(), "hi");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("hello.txt")).unwrap(),
+            "hi"
+        );
     }
 
     #[test]
@@ -115,7 +126,12 @@ mod tests {
     fn repo_with_two_branches(work: &std::path::Path) {
         let sh = |args: &[&str]| {
             assert!(
-                Command::new("git").args(args).current_dir(work).status().unwrap().success(),
+                Command::new("git")
+                    .args(args)
+                    .current_dir(work)
+                    .status()
+                    .unwrap()
+                    .success(),
                 "git {args:?}"
             );
         };
@@ -149,8 +165,14 @@ mod tests {
         clone_bundle(&bpath, &dest).unwrap();
 
         // main's file restored; the non-selected feature branch's file absent.
-        assert_eq!(std::fs::read_to_string(dest.join("on_main.txt")).unwrap(), "m");
-        assert!(!dest.join("on_feature.txt").exists(), "feature branch leaked into the bundle");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("on_main.txt")).unwrap(),
+            "m"
+        );
+        assert!(
+            !dest.join("on_feature.txt").exists(),
+            "feature branch leaked into the bundle"
+        );
     }
 
     #[test]

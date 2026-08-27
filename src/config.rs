@@ -189,33 +189,46 @@ mod tests {
     #[test]
     fn loads_valid_config() {
         let d = tempfile::tempdir().unwrap();
-        let p = write(d.path(), "config.toml", r#"
+        let p = write(
+            d.path(),
+            "config.toml",
+            r#"
 repos_root = "/srv/repos"
 age_recipient = "age1qqqexamplepublickey"
 [s3]
 bucket = "b"
 region = "us-east-1"
-"#, 0o644);
+"#,
+            0o644,
+        );
         let c = Config::load(&p).unwrap();
         assert_eq!(c.s3.prefix, "git-ark"); // default applied
         assert_eq!(c.repos_root, std::path::PathBuf::from("/srv/repos"));
         // backup_refs defaults to main/master when omitted.
         assert_eq!(
             c.backup_refs,
-            vec!["refs/heads/main".to_string(), "refs/heads/master".to_string()]
+            vec![
+                "refs/heads/main".to_string(),
+                "refs/heads/master".to_string()
+            ]
         );
     }
 
     #[test]
     fn rejects_non_age_recipient() {
         let d = tempfile::tempdir().unwrap();
-        let p = write(d.path(), "config.toml", r#"
+        let p = write(
+            d.path(),
+            "config.toml",
+            r#"
 repos_root = "/srv/repos"
 age_recipient = "not-a-key"
 [s3]
 bucket = "b"
 region = "us-east-1"
-"#, 0o644);
+"#,
+            0o644,
+        );
         assert!(Config::load(&p).is_err());
     }
 
@@ -223,11 +236,16 @@ region = "us-east-1"
     #[test]
     fn rejects_world_readable_secrets() {
         let d = tempfile::tempdir().unwrap();
-        let p = write(d.path(), "secrets.toml", r#"
+        let p = write(
+            d.path(),
+            "secrets.toml",
+            r#"
 [aws]
 access_key_id = "AKIA"
 secret_access_key = "s"
-"#, 0o644);
+"#,
+            0o644,
+        );
         assert!(Secrets::load(&p).is_err(), "0644 secrets must be rejected");
     }
 
@@ -235,11 +253,16 @@ secret_access_key = "s"
     #[test]
     fn loads_locked_secrets() {
         let d = tempfile::tempdir().unwrap();
-        let p = write(d.path(), "secrets.toml", r#"
+        let p = write(
+            d.path(),
+            "secrets.toml",
+            r#"
 [aws]
 access_key_id = "AKIA"
 secret_access_key = "s"
-"#, 0o600);
+"#,
+            0o600,
+        );
         let s = Secrets::load(&p).unwrap();
         assert_eq!(s.aws.access_key_id, "AKIA");
     }
@@ -259,10 +282,22 @@ secret_access_key = "s"
         };
 
         let debug_output = format!("{:?}", s);
-        assert!(!debug_output.contains("SUPERSECRET123"), "secret_access_key leaked in debug output");
-        assert!(!debug_output.contains("TOKENXYZ123456789"), "github token leaked in debug output");
-        assert!(!debug_output.contains("AKIAIOSFODNN7EXAMPLE"), "access_key_id leaked in debug output");
-        assert!(debug_output.contains("[redacted]"), "debug output should contain redaction marker");
+        assert!(
+            !debug_output.contains("SUPERSECRET123"),
+            "secret_access_key leaked in debug output"
+        );
+        assert!(
+            !debug_output.contains("TOKENXYZ123456789"),
+            "github token leaked in debug output"
+        );
+        assert!(
+            !debug_output.contains("AKIAIOSFODNN7EXAMPLE"),
+            "access_key_id leaked in debug output"
+        );
+        assert!(
+            debug_output.contains("[redacted]"),
+            "debug output should contain redaction marker"
+        );
     }
 
     #[test]
@@ -287,8 +322,14 @@ secret_access_key = "s"
             tokens,
         };
         let debug_output = format!("{:?}", gh);
-        assert!(!debug_output.contains("ghp_sensitive_token_value"), "default token leaked");
-        assert!(!debug_output.contains("ghp_per_owner_secret"), "per-owner token leaked");
+        assert!(
+            !debug_output.contains("ghp_sensitive_token_value"),
+            "default token leaked"
+        );
+        assert!(
+            !debug_output.contains("ghp_per_owner_secret"),
+            "per-owner token leaked"
+        );
         assert!(debug_output.contains("[redacted]"));
     }
 

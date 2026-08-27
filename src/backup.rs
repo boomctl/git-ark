@@ -8,9 +8,13 @@ use crate::store::ObjectStore;
 use crate::{crypto, git};
 
 pub fn repo_name(repos_root: &Path, repo: &Path) -> Result<String> {
-    let rel = repo
-        .strip_prefix(repos_root)
-        .map_err(|_| anyhow!("repo {} not under root {}", repo.display(), repos_root.display()))?;
+    let rel = repo.strip_prefix(repos_root).map_err(|_| {
+        anyhow!(
+            "repo {} not under root {}",
+            repo.display(),
+            repos_root.display()
+        )
+    })?;
     let s = rel.to_string_lossy();
     Ok(s.strip_suffix(".git").unwrap_or(&s).to_string())
 }
@@ -104,7 +108,12 @@ pub fn summarize_refs(
     // Display name: drop `refs/heads/`; other refs (e.g. tags) are shown whole.
     let display = |r: &str| r.strip_prefix("refs/heads/").unwrap_or(r).to_string();
     let names: Vec<String> = updated.iter().map(|r| display(r)).collect();
-    let width = names.iter().map(|n| n.chars().count()).max().unwrap_or(0).max(14);
+    let width = names
+        .iter()
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(14);
 
     let mut lines = Vec::with_capacity(updated.len());
     for (r, name) in updated.iter().zip(&names) {
@@ -188,13 +197,20 @@ mod key_tests {
     use std::path::Path;
     #[test]
     fn repo_name_strips_root_and_git() {
-        let n = repo_name(Path::new("/srv/repos"), Path::new("/srv/repos/team/app.git")).unwrap();
+        let n = repo_name(
+            Path::new("/srv/repos"),
+            Path::new("/srv/repos/team/app.git"),
+        )
+        .unwrap();
         assert_eq!(n, "team/app");
     }
     #[test]
     fn key_layout() {
         assert_eq!(latest_key("git-ark", "app"), "git-ark/app/latest.age");
-        assert_eq!(history_key("git-ark", "app", "2026-01-02T03-04-05Z"), "git-ark/app/history/2026-01-02T03-04-05Z.age");
+        assert_eq!(
+            history_key("git-ark", "app", "2026-01-02T03-04-05Z"),
+            "git-ark/app/history/2026-01-02T03-04-05Z.age"
+        );
     }
 }
 
@@ -203,7 +219,10 @@ mod gate_tests {
     use super::*;
 
     fn defaults() -> Vec<String> {
-        vec!["refs/heads/main".to_string(), "refs/heads/master".to_string()]
+        vec![
+            "refs/heads/main".to_string(),
+            "refs/heads/master".to_string(),
+        ]
     }
     fn refs(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -212,7 +231,10 @@ mod gate_tests {
     #[test]
     fn parses_receive_ref_lines() {
         let input = "aaa bbb refs/heads/main\nccc ddd refs/heads/feature\n";
-        assert_eq!(parse_receive_refs(input), refs(&["refs/heads/main", "refs/heads/feature"]));
+        assert_eq!(
+            parse_receive_refs(input),
+            refs(&["refs/heads/main", "refs/heads/feature"])
+        );
     }
 
     #[test]
@@ -230,7 +252,10 @@ mod gate_tests {
         assert!(should_back_up(&refs(&["refs/heads/master"]), &defaults()));
         assert!(!should_back_up(&refs(&["refs/heads/feature"]), &defaults()));
         // A push touching several refs including main is gated in.
-        assert!(should_back_up(&refs(&["refs/heads/feature", "refs/heads/main"]), &defaults()));
+        assert!(should_back_up(
+            &refs(&["refs/heads/feature", "refs/heads/main"]),
+            &defaults()
+        ));
     }
 
     #[test]
@@ -250,7 +275,12 @@ mod bundle_selection_tests {
     fn repo_with_branches(dir: &Path) {
         let g = |args: &[&str]| {
             assert!(
-                Command::new("git").args(args).current_dir(dir).status().unwrap().success(),
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success(),
                 "git {args:?}"
             );
         };
@@ -271,8 +301,14 @@ mod bundle_selection_tests {
     fn double_star_or_star_selects_all() {
         let d = tempfile::tempdir().unwrap();
         repo_with_branches(d.path());
-        assert_eq!(resolve_bundle_refs(d.path(), &strs(&["**"])).unwrap(), BundleSelection::All);
-        assert_eq!(resolve_bundle_refs(d.path(), &strs(&["*"])).unwrap(), BundleSelection::All);
+        assert_eq!(
+            resolve_bundle_refs(d.path(), &strs(&["**"])).unwrap(),
+            BundleSelection::All
+        );
+        assert_eq!(
+            resolve_bundle_refs(d.path(), &strs(&["*"])).unwrap(),
+            BundleSelection::All
+        );
         // A `**` anywhere in the list wins.
         assert_eq!(
             resolve_bundle_refs(d.path(), &strs(&["main", "**"])).unwrap(),
@@ -324,7 +360,11 @@ mod summary_tests {
 
     #[test]
     fn three_tier_example() {
-        let updated = strs(&["refs/heads/main", "refs/heads/big-feature", "refs/heads/scratch"]);
+        let updated = strs(&[
+            "refs/heads/main",
+            "refs/heads/big-feature",
+            "refs/heads/scratch",
+        ]);
         let backup_refs = strs(&["main", "big-feature"]);
         let github = strs(&["main"]);
         let out = summarize_refs(&updated, &backup_refs, &github);

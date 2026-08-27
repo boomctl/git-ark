@@ -35,7 +35,10 @@ pub struct GitCommand {
 pub fn parse_ssh_command(cmd: &str) -> Result<GitCommand> {
     let tokens = shell_words::split(cmd).context("splitting SSH_ORIGINAL_COMMAND")?;
     if tokens.len() != 2 {
-        bail!("expected `<git-verb> <repo>`, got {} token(s): {cmd:?}", tokens.len());
+        bail!(
+            "expected `<git-verb> <repo>`, got {} token(s): {cmd:?}",
+            tokens.len()
+        );
     }
     let verb = match tokens[0].as_str() {
         "git-receive-pack" => GitVerb::ReceivePack,
@@ -151,11 +154,17 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let bin = d.path().join("git-receive-pack");
         std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        let dirs = vec![PathBuf::from("/nonexistent-dir-xyz"), d.path().to_path_buf()];
+        let dirs = vec![
+            PathBuf::from("/nonexistent-dir-xyz"),
+            d.path().to_path_buf(),
+        ];
 
         let found = find_in_dirs("git-receive-pack", &dirs).unwrap();
         assert_eq!(found, bin);
-        assert!(found.is_absolute(), "resolved path must be absolute: {found:?}");
+        assert!(
+            found.is_absolute(),
+            "resolved path must be absolute: {found:?}"
+        );
 
         assert!(
             find_in_dirs("git-upload-pack", &dirs).is_none(),
@@ -178,8 +187,14 @@ pub fn plan_action(cfg: &Config, cmd: &GitCommand) -> Action {
     };
     let exists = repo.exists();
     match (cmd.verb.is_write(), exists) {
-        (_, true) => Action::Serve { repo, verb: cmd.verb },
-        (true, false) => Action::InitThenServe { repo, verb: cmd.verb },
+        (_, true) => Action::Serve {
+            repo,
+            verb: cmd.verb,
+        },
+        (true, false) => Action::InitThenServe {
+            repo,
+            verb: cmd.verb,
+        },
         (false, false) => Action::Reject(format!("repository does not exist: {}", cmd.repo_arg)),
     }
 }
@@ -212,13 +227,17 @@ pub fn run_shell(cfg: &Config, config_path: &Path, binary: &Path) -> Result<()> 
 #[cfg(test)]
 mod plan_tests {
     use super::*;
-    use crate::config::{Config, S3Config, GithubConfig};
+    use crate::config::{Config, GithubConfig, S3Config};
 
     fn cfg(root: &std::path::Path) -> Config {
         Config {
             repos_root: root.to_path_buf(),
             age_recipient: "age1x".into(),
-            s3: S3Config { bucket: "b".into(), region: "r".into(), prefix: "git-ark".into() },
+            s3: S3Config {
+                bucket: "b".into(),
+                region: "r".into(),
+                prefix: "git-ark".into(),
+            },
             github: GithubConfig::default(),
             backup_refs: Vec::new(),
         }
@@ -228,7 +247,10 @@ mod plan_tests {
     fn push_to_missing_repo_inits() {
         let d = tempfile::tempdir().unwrap();
         let c = cfg(d.path());
-        let cmd = GitCommand { verb: GitVerb::ReceivePack, repo_arg: "new".into() };
+        let cmd = GitCommand {
+            verb: GitVerb::ReceivePack,
+            repo_arg: "new".into(),
+        };
         match plan_action(&c, &cmd) {
             Action::InitThenServe { repo, verb } => {
                 assert_eq!(verb, GitVerb::ReceivePack);
@@ -242,7 +264,10 @@ mod plan_tests {
     fn fetch_from_missing_repo_rejects() {
         let d = tempfile::tempdir().unwrap();
         let c = cfg(d.path());
-        let cmd = GitCommand { verb: GitVerb::UploadPack, repo_arg: "ghost".into() };
+        let cmd = GitCommand {
+            verb: GitVerb::UploadPack,
+            repo_arg: "ghost".into(),
+        };
         assert!(matches!(plan_action(&c, &cmd), Action::Reject(_)));
     }
 
@@ -252,7 +277,10 @@ mod plan_tests {
         let repo = d.path().join("here.git");
         std::fs::create_dir_all(&repo).unwrap();
         let c = cfg(d.path());
-        let cmd = GitCommand { verb: GitVerb::UploadPack, repo_arg: "here".into() };
+        let cmd = GitCommand {
+            verb: GitVerb::UploadPack,
+            repo_arg: "here".into(),
+        };
         assert!(matches!(plan_action(&c, &cmd), Action::Serve { .. }));
     }
 }
@@ -265,21 +293,36 @@ mod resolve_tests {
     #[test]
     fn strips_leading_slash_and_tilde() {
         let root = Path::new("/srv/repos");
-        assert_eq!(resolve_repo_path(root, "/myproject.git").unwrap(), root.join("myproject.git"));
-        assert_eq!(resolve_repo_path(root, "~/myproject.git").unwrap(), root.join("myproject.git"));
-        assert_eq!(resolve_repo_path(root, "myproject.git").unwrap(), root.join("myproject.git"));
+        assert_eq!(
+            resolve_repo_path(root, "/myproject.git").unwrap(),
+            root.join("myproject.git")
+        );
+        assert_eq!(
+            resolve_repo_path(root, "~/myproject.git").unwrap(),
+            root.join("myproject.git")
+        );
+        assert_eq!(
+            resolve_repo_path(root, "myproject.git").unwrap(),
+            root.join("myproject.git")
+        );
     }
 
     #[test]
     fn appends_git_suffix() {
         let root = Path::new("/srv/repos");
-        assert_eq!(resolve_repo_path(root, "myproject").unwrap(), root.join("myproject.git"));
+        assert_eq!(
+            resolve_repo_path(root, "myproject").unwrap(),
+            root.join("myproject.git")
+        );
     }
 
     #[test]
     fn allows_subdirs() {
         let root = Path::new("/srv/repos");
-        assert_eq!(resolve_repo_path(root, "team/app").unwrap(), root.join("team/app.git"));
+        assert_eq!(
+            resolve_repo_path(root, "team/app").unwrap(),
+            root.join("team/app.git")
+        );
     }
 
     #[test]
