@@ -36,18 +36,22 @@ pub fn usage(path: &Path) -> Result<DiskUsage> {
         .ok_or_else(|| anyhow!("could not parse df output for {}", path.display()))
 }
 
-/// Parse `df -Pk` output. `-P` guarantees one physical line per filesystem, so
-/// the fixed POSIX columns are read from the RIGHT (mounted-on is last):
-/// `Filesystem 1024-blocks Used Available Capacity Mounted-on`.
+/// Parse `df -Pk` output. `-P` guarantees one physical line per filesystem:
+/// `Filesystem 1024-blocks Used Available Capacity Mounted-on`. We anchor on the
+/// Capacity column — the single `NN%` token — because the Mounted-on column that
+/// follows it can contain spaces (e.g. `/Volumes/My Disk`), which a right-edge
+/// anchor would miscount. Everything after `%` is ignored; the numeric columns
+/// sit at fixed offsets before it. Non-numeric parses fall through to `None`.
 fn parse_df_pk(text: &str) -> Option<DiskUsage> {
     let line = text.lines().nth(1)?;
     let cols: Vec<&str> = line.split_whitespace().collect();
-    let n = cols.len();
-    if n < 5 {
+    // Capacity is `NN%`; Available is the token before it, 1024-blocks three before.
+    let cap = cols.iter().position(|c| c.ends_with('%'))?;
+    if cap < 3 {
         return None;
     }
-    let blocks: u64 = cols[n - 5].parse().ok()?;
-    let avail: u64 = cols[n - 3].parse().ok()?;
+    let blocks: u64 = cols[cap - 3].parse().ok()?;
+    let avail: u64 = cols[cap - 1].parse().ok()?;
     Some(DiskUsage {
         total_bytes: blocks.checked_mul(1024)?,
         free_bytes: avail.checked_mul(1024)?,
@@ -65,14 +69,25 @@ pub fn is_low(u: DiskUsage, warn_percent: u8, warn_min_free_bytes: u64) -> bool 
 mod tests {
     use super::*;
 
-    // Real `df -Pk` output: header line, then one line per filesystem. Columns
-    // are parsed from the RIGHT so a long device name can't shift them.
+    // Real `df -Pk` output: header line, then one line per filesystem. Parsing
+    // anchors on the Capacity (`NN%`) column.
     const DF: &str = "Filesystem 1024-blocks      Used Available Capacity Mounted on\n\
                       /dev/disk1s1 976490568 810000000 160000000      84% /\n";
 
     #[test]
-    fn parses_df_pk_from_the_right() {
+    fn parses_df_pk_anchored_on_capacity() {
         let u = parse_df_pk(DF).unwrap();
+        assert_eq!(u.total_bytes, 976_490_568 * 1024);
+        assert_eq!(u.free_bytes, 160_000_000 * 1024);
+    }
+
+    #[test]
+    fn parses_df_pk_with_spaces_in_mount_path() {
+        // A "Mounted on" column with spaces must not shift the numeric columns —
+        // the reproduced should-fix. Anchoring on the `%` token survives it.
+        let df = "Filesystem 1024-blocks      Used Available Capacity Mounted on\n\
+                  /dev/disk3s1 976490568 810000000 160000000      84% /Volumes/My Big Disk\n";
+        let u = parse_df_pk(df).unwrap();
         assert_eq!(u.total_bytes, 976_490_568 * 1024);
         assert_eq!(u.free_bytes, 160_000_000 * 1024);
     }
