@@ -6,6 +6,7 @@ pub mod disk;
 pub mod git;
 pub mod github;
 pub mod hooks;
+pub mod hostcmd;
 pub mod hostspec;
 pub mod registry;
 pub mod repo_policy;

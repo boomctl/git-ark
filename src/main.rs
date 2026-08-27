@@ -7,6 +7,7 @@ use git_ark::backup::{parse_receive_refs, repo_name, run_backup, should_back_up,
 use git_ark::clock::SystemClock;
 use git_ark::config::{Config, Secrets};
 use git_ark::github::{self, branches_to_mirror};
+use git_ark::hostcmd::{self, HostAddArgs};
 use git_ark::repo_policy::{read_repo_policy, Visibility};
 use git_ark::restore::{list_versions, run_restore};
 use git_ark::s3::S3ObjectStore;
@@ -50,6 +51,47 @@ enum Cmd {
     },
     /// Report host health as `key=value` lines (for the client control plane).
     Selfcheck,
+    /// Manage git-ark hosts from this client (control plane). Cross-platform:
+    /// this is the client's tool, not the host-only shim above.
+    Host {
+        #[command(subcommand)]
+        action: HostAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostAction {
+    /// Probe a host, wire git-ark onto it, verify with `selfcheck`, and
+    /// register it in the client's host registry.
+    Add {
+        /// Name for this host: keys it into the registry, the SSH alias
+        /// `git-ark-<name>`, and the forced-command keypair filename.
+        name: String,
+        /// SSH target to probe/wire, `user@host` — the operator's normal
+        /// interactive login, never the forced-command key (that's what
+        /// this installs).
+        target: String,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        identity: Option<PathBuf>,
+        /// S3 bucket the host's config.toml will point at.
+        #[arg(long)]
+        bucket: String,
+        #[arg(long, default_value = "us-east-1")]
+        region: String,
+        #[arg(long, default_value = "git-ark")]
+        prefix: String,
+        /// S3-compatible endpoint (MinIO, R2, …); omit for real AWS S3.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// age public key the host will encrypt backups to.
+        #[arg(long)]
+        recipient: String,
+        /// Path to the git-ark binary built for the host's release triple.
+        #[arg(long)]
+        binary: PathBuf,
+    },
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -257,6 +299,31 @@ fn real_main() -> Result<()> {
             println!("config_valid=true");
             Ok(())
         }
+        Cmd::Host { action } => match action {
+            HostAction::Add {
+                name,
+                target,
+                port,
+                identity,
+                bucket,
+                region,
+                prefix,
+                endpoint,
+                recipient,
+                binary,
+            } => hostcmd::host_add(&HostAddArgs {
+                name,
+                target,
+                port,
+                identity,
+                bucket,
+                region,
+                prefix,
+                endpoint,
+                recipient,
+                binary,
+            }),
+        },
         Cmd::Restore {
             repo,
             version,
