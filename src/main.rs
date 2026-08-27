@@ -195,12 +195,19 @@ fn real_main() -> Result<()> {
             // a hook-driven push only when it moved a gated ref.
             let do_s3 = updated.is_empty() || should_back_up(&updated, effective_backup_refs);
 
-            // GitHub mirror: only when the policy has an enabled github block.
+            // GitHub mirror: only when this host is the client-enforced
+            // singleton mirror (cfg.mirror) AND the policy has an enabled
+            // github block. A non-mirror host never runs this step, even if
+            // its policy names one — the token isn't there anyway.
             // Push exactly the just-updated branches the policy names.
-            let github = policy
-                .as_ref()
-                .and_then(|p| p.github.as_ref())
-                .filter(|g| g.enabled);
+            let github = if cfg.mirror {
+                policy
+                    .as_ref()
+                    .and_then(|p| p.github.as_ref())
+                    .filter(|g| g.enabled)
+            } else {
+                None
+            };
             let mirror_branches: Vec<String> = match github {
                 Some(g) => branches_to_mirror(&updated, &g.branches),
                 None => Vec::new(),

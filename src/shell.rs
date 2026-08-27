@@ -240,6 +240,7 @@ mod plan_tests {
                 endpoint: None,
             },
             github: GithubConfig::default(),
+            mirror: false,
             backup_refs: Vec::new(),
             disk_warn_percent: 15,
             disk_warn_min_free_bytes: 10 * 1024 * 1024 * 1024,

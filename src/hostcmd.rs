@@ -11,8 +11,8 @@
 
 use crate::config::S3Config;
 use crate::hostspec::{
-    assess, forced_command_line, parse_probe, render_config, render_secrets, ssh_config_block,
-    PROBE_SCRIPT,
+    assess, forced_command_line, parse_probe, per_host_prefix, render_config, render_secrets,
+    ssh_config_block, PROBE_SCRIPT,
 };
 use crate::registry::{Host, Registry};
 use anyhow::{bail, Context, Result};
@@ -470,21 +470,25 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
 
     // 6. Stream config.toml and secrets.toml. The host's write-only S3
     // credential was read from env at the top of this fn — never argv,
-    // never printed.
+    // never printed. The rendered config's prefix is namespaced by host name
+    // (per_host_prefix) so each host writes its own S3 subtree — the
+    // registry keeps `args.prefix` as the shared base (see the `Host {..}`
+    // below). No `--mirror` yet (Task 3); every host add is a plain,
+    // non-mirror host until then.
     let s3 = S3Config {
         bucket: args.bucket.clone(),
         region: args.region.clone(),
-        prefix: args.prefix.clone(),
+        prefix: per_host_prefix(&args.prefix, &args.name),
         endpoint: args.endpoint.clone(),
     };
-    let config_text = render_config(&plan.install_dir, &args.recipient, &s3);
+    let config_text = render_config(&plan.install_dir, &args.recipient, &s3, false);
     ssh_pipe_file(
         &spec,
         &format!("{}/config.toml", plan.install_dir),
         config_text.as_bytes(),
         0o644,
     )?;
-    let secrets_text = render_secrets(&key_id, &secret);
+    let secrets_text = render_secrets(&key_id, &secret, None);
     ssh_pipe_file(
         &spec,
         &format!("{}/secrets.toml", plan.install_dir),

@@ -148,7 +148,9 @@ fn repo_policy_backup_refs_override_gates_a_feature_branch() {
 fn mirror_without_token_fails_with_clear_message() {
     // backup_refs excludes `main` (so S3 is NOT triggered) while the github
     // block opts `main` into the mirror — isolating the empty-token guard so it
-    // bails BEFORE any network call. secrets.toml has [aws] but no github token.
+    // bails BEFORE any network call. secrets.toml has [aws] but no github
+    // token. config.toml sets `mirror = true` — the github step is gated on
+    // this host being the designated mirror.
     let root = tempfile::tempdir().unwrap();
     let policy = "backup_refs:\n  - other\ngithub:\n  owner: acme\n  branches:\n    - main\n";
     let repo = bare_repo_with_policy(root.path(), "proj.git", policy);
@@ -160,6 +162,7 @@ fn mirror_without_token_fails_with_clear_message() {
         format!(
             "repos_root = \"{}\"\n\
              age_recipient = \"age1qqqqexamplepublickeyxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n\
+             mirror = true\n\
              [s3]\nbucket = \"b\"\nregion = \"us-east-1\"\n",
             root.path().display()
         ),

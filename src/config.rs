@@ -9,6 +9,13 @@ pub struct Config {
     pub s3: S3Config,
     #[serde(default)]
     pub github: GithubConfig,
+    /// Whether this host is the client-enforced singleton GitHub mirror.
+    /// Only a host with `mirror = true` runs the GitHub mirror step on
+    /// backup — the token itself lives in `secrets.toml` `[github]`, which is
+    /// present only here too. Set by `hostspec::render_config`, never by
+    /// hand.
+    #[serde(default)]
+    pub mirror: bool,
     /// Refs whose push triggers the durable S3 backup. A push that updates a
     /// matching ref is bundled/encrypted/uploaded; other pushes stay on the
     /// host only. A bare name (`main`) matches `refs/heads/main`; `**` matches

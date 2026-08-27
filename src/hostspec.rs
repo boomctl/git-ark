@@ -156,8 +156,16 @@ pub fn assess(facts: &ProbeFacts) -> Result<HostPlan, Vec<String>> {
 /// Render the host's `config.toml`: `repos_root` under `install_dir`, the
 /// age recipient (public key only — the private identity never leaves the
 /// client), and an `[s3]` table. `endpoint` is included only when the S3
-/// config has one (real AWS S3 otherwise).
-pub fn render_config(install_dir: &str, recipient: &str, s3: &crate::config::S3Config) -> String {
+/// config has one (real AWS S3 otherwise). `mirror = true` is appended only
+/// when `mirror` is set — the host's backup arm gates the GitHub mirror on
+/// this line, so a non-mirror host omits it entirely rather than writing
+/// `mirror = false`.
+pub fn render_config(
+    install_dir: &str,
+    recipient: &str,
+    s3: &crate::config::S3Config,
+    mirror: bool,
+) -> String {
     let mut out = format!(
         "repos_root = \"{install_dir}/repos\"\nage_recipient = \"{recipient}\"\n\n[s3]\nbucket = \"{}\"\nregion = \"{}\"\nprefix = \"{}\"\n",
         s3.bucket, s3.region, s3.prefix
@@ -165,13 +173,23 @@ pub fn render_config(install_dir: &str, recipient: &str, s3: &crate::config::S3C
     if let Some(endpoint) = &s3.endpoint {
         out.push_str(&format!("endpoint = \"{endpoint}\"\n"));
     }
+    if mirror {
+        out.push_str("mirror = true\n");
+    }
     out
 }
 
-/// Render the host's `secrets.toml`: the write-only S3 credential, `[aws]`
-/// only. Written `chmod 600` by the caller; never printed.
-pub fn render_secrets(key_id: &str, secret: &str) -> String {
-    format!("[aws]\naccess_key_id = \"{key_id}\"\nsecret_access_key = \"{secret}\"\n")
+/// Render the host's `secrets.toml`: the write-only S3 credential, `[aws]`,
+/// plus an optional `[github]` token. Written `chmod 600` by the caller;
+/// never printed. The token is the client-enforced singleton mirror's
+/// credential — present only on the one host currently designated `mirror`.
+pub fn render_secrets(key_id: &str, secret: &str, github_token: Option<&str>) -> String {
+    let mut out =
+        format!("[aws]\naccess_key_id = \"{key_id}\"\nsecret_access_key = \"{secret}\"\n");
+    if let Some(token) = github_token {
+        out.push_str(&format!("\n[github]\ntoken = \"{token}\"\n"));
+    }
+    out
 }
 
 /// The exact `authorized_keys` entry for the forced-command key: restricted
@@ -394,14 +412,14 @@ mod tests {
 
     #[test]
     fn render_config_includes_repos_root_and_recipient() {
-        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint());
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint(), false);
         assert!(cfg.contains("repos_root = \"/home/ark/git-ark/repos\""));
         assert!(cfg.contains("age_recipient = \"age1abc\""));
     }
 
     #[test]
     fn render_config_includes_endpoint_when_some() {
-        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint());
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint(), false);
         assert!(cfg.contains("[s3]"));
         assert!(cfg.contains("bucket = \"b\""));
         assert!(cfg.contains("region = \"us-east-1\""));
@@ -417,8 +435,20 @@ mod tests {
             prefix: "git-ark".to_string(),
             endpoint: None,
         };
-        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3);
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3, false);
         assert!(!cfg.contains("endpoint"));
+    }
+
+    #[test]
+    fn render_config_includes_mirror_line_when_true() {
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint(), true);
+        assert!(cfg.contains("mirror = true"));
+    }
+
+    #[test]
+    fn render_config_omits_mirror_line_when_false() {
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint(), false);
+        assert!(!cfg.contains("mirror ="));
     }
 
     #[test]
@@ -428,11 +458,25 @@ mod tests {
 
     #[test]
     fn render_secrets_has_aws_section_only() {
-        let s = render_secrets("AKIAEXAMPLE", "sekrit");
+        let s = render_secrets("AKIAEXAMPLE", "sekrit", None);
         assert!(s.contains("[aws]"));
         assert!(s.contains("access_key_id = \"AKIAEXAMPLE\""));
         assert!(s.contains("secret_access_key = \"sekrit\""));
         assert!(!s.contains("[github]"));
+    }
+
+    #[test]
+    fn render_secrets_includes_github_token_when_some() {
+        let s = render_secrets("AKIAEXAMPLE", "sekrit", Some("ghp_x"));
+        assert!(s.contains("[github]"));
+        assert!(s.contains("token = \"ghp_x\""));
+    }
+
+    #[test]
+    fn render_secrets_omits_github_section_when_none() {
+        let s = render_secrets("AKIAEXAMPLE", "sekrit", None);
+        assert!(!s.contains("[github]"));
+        assert!(!s.contains("token ="));
     }
 
     #[test]
