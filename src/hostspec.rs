@@ -153,6 +153,45 @@ pub fn assess(facts: &ProbeFacts) -> Result<HostPlan, Vec<String>> {
     Err(reasons)
 }
 
+/// Render the host's `config.toml`: `repos_root` under `install_dir`, the
+/// age recipient (public key only — the private identity never leaves the
+/// client), and an `[s3]` table. `endpoint` is included only when the S3
+/// config has one (real AWS S3 otherwise).
+pub fn render_config(install_dir: &str, recipient: &str, s3: &crate::config::S3Config) -> String {
+    let mut out = format!(
+        "repos_root = \"{install_dir}/repos\"\nage_recipient = \"{recipient}\"\n\n[s3]\nbucket = \"{}\"\nregion = \"{}\"\nprefix = \"{}\"\n",
+        s3.bucket, s3.region, s3.prefix
+    );
+    if let Some(endpoint) = &s3.endpoint {
+        out.push_str(&format!("endpoint = \"{endpoint}\"\n"));
+    }
+    out
+}
+
+/// Render the host's `secrets.toml`: the write-only S3 credential, `[aws]`
+/// only. Written `chmod 600` by the caller; never printed.
+pub fn render_secrets(key_id: &str, secret: &str) -> String {
+    format!("[aws]\naccess_key_id = \"{key_id}\"\nsecret_access_key = \"{secret}\"\n")
+}
+
+/// The exact `authorized_keys` entry for the forced-command key: restricted
+/// to running `git-ark shell` against this host's own config, with no pty,
+/// port/agent/X11 forwarding. Uses the absolute `install_dir` — sshd does
+/// not expand `$HOME` in `command=`.
+pub fn forced_command_line(install_dir: &str, pubkey: &str) -> String {
+    format!(
+        "command=\"{install_dir}/bin/git-ark shell --config {install_dir}/config.toml\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding {pubkey}"
+    )
+}
+
+/// A client `~/.ssh/config` block wiring `git push git-ark-<name>:<repo>` to
+/// the host over the forced-command key.
+pub fn ssh_config_block(name: &str, host: &str, port: u16, user: &str, identity: &str) -> String {
+    format!(
+        "Host git-ark-{name}\n  HostName {host}\n  Port {port}\n  User {user}\n  IdentityFile {identity}\n  IdentitiesOnly yes\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,5 +375,79 @@ mod tests {
         };
         let plan = assess(&facts).unwrap();
         assert_eq!(plan.existing_version, Some("0.1.0".to_string()));
+    }
+
+    fn s3_with_endpoint() -> crate::config::S3Config {
+        crate::config::S3Config {
+            bucket: "b".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "git-ark".to_string(),
+            endpoint: Some("http://minio:9000".to_string()),
+        }
+    }
+
+    #[test]
+    fn render_config_includes_repos_root_and_recipient() {
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint());
+        assert!(cfg.contains("repos_root = \"/home/ark/git-ark/repos\""));
+        assert!(cfg.contains("age_recipient = \"age1abc\""));
+    }
+
+    #[test]
+    fn render_config_includes_endpoint_when_some() {
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3_with_endpoint());
+        assert!(cfg.contains("[s3]"));
+        assert!(cfg.contains("bucket = \"b\""));
+        assert!(cfg.contains("region = \"us-east-1\""));
+        assert!(cfg.contains("prefix = \"git-ark\""));
+        assert!(cfg.contains("endpoint = \"http://minio:9000\""));
+    }
+
+    #[test]
+    fn render_config_omits_endpoint_when_none() {
+        let s3 = crate::config::S3Config {
+            bucket: "b".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "git-ark".to_string(),
+            endpoint: None,
+        };
+        let cfg = render_config("/home/ark/git-ark", "age1abc", &s3);
+        assert!(!cfg.contains("endpoint"));
+    }
+
+    #[test]
+    fn render_secrets_has_aws_section_only() {
+        let s = render_secrets("AKIAEXAMPLE", "sekrit");
+        assert!(s.contains("[aws]"));
+        assert!(s.contains("access_key_id = \"AKIAEXAMPLE\""));
+        assert!(s.contains("secret_access_key = \"sekrit\""));
+        assert!(!s.contains("[github]"));
+    }
+
+    #[test]
+    fn forced_command_line_has_expected_shape() {
+        let line = forced_command_line("/home/ark/git-ark", "ssh-ed25519 AAAAC3... git-ark");
+        assert!(line.starts_with(
+            "command=\"/home/ark/git-ark/bin/git-ark shell --config /home/ark/git-ark/config.toml\","
+        ));
+        assert!(line.contains(",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding "));
+        assert!(line.ends_with(" ssh-ed25519 AAAAC3... git-ark"));
+    }
+
+    #[test]
+    fn ssh_config_block_has_host_alias_and_identities_only() {
+        let block = ssh_config_block(
+            "testbox",
+            "example.com",
+            2222,
+            "ark",
+            "/home/phil/.ssh/git-ark/testbox",
+        );
+        assert!(block.contains("Host git-ark-testbox"));
+        assert!(block.contains("HostName example.com"));
+        assert!(block.contains("Port 2222"));
+        assert!(block.contains("User ark"));
+        assert!(block.contains("IdentityFile /home/phil/.ssh/git-ark/testbox"));
+        assert!(block.contains("IdentitiesOnly yes"));
     }
 }
