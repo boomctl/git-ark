@@ -1,0 +1,31 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Secrets & keys — NEVER commit these
+secrets.toml
+*.age
+*.key
+*.pem
+id_*
+!id_*.pub
+age-identity*
+*.identity
+
+# Real (non-example) local config
+config.toml
+config.local.toml
+
+# Local repo storage / backups if run from the tree
+/repos
+/backups
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local agent / worktree scratch
+.claude/

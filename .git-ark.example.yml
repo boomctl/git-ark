@@ -1,0 +1,29 @@
+# git-ark per-repo policy — commit this as `.git-ark.yml` at your repo root.
+#
+# On push, the git-ark hook reads this file straight from the bare repo's HEAD
+# and uses it to (a) decide which branches earn the durable, encrypted S3 backup
+# and (b) mirror named branches to GitHub. It lives IN the repo, so the policy
+# travels with the code and every clone carries it.
+#
+# Everything here is optional. With no `.git-ark.yml` at all, the repo falls
+# back to the host's central `backup_refs` and does not mirror anywhere.
+
+# Branches whose push earns the durable, client-side-encrypted S3 backup.
+# When present and non-empty, this OVERRIDES the host's central backup_refs for
+# this repo — the way to opt a long-lived branch into the durable tier without
+# re-uploading the whole repo on every feature-branch commit. A bare name
+# (`main`) matches `refs/heads/main`. Omit this key to keep the host default.
+backup_refs:
+  - main
+  - long-lived-feature
+
+# Optional GitHub mirror. Omit this whole block (or set `enabled: false`) to
+# keep the repo on your host + encrypted S3 only, never touching the internet.
+github:
+  enabled: true          # set false to keep the block but turn mirroring off
+  visibility: private    # private (DEFAULT) | public — used only when git-ark
+                         # creates the repo; case-insensitive
+  owner: some-org        # GitHub org or user that owns the mirror (required)
+  repo: custom-name      # optional; defaults to this repo's own name
+  branches:              # which branches to push to the mirror
+    - main

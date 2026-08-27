@@ -1,0 +1,37 @@
+# git-ark configuration (non-secret) — copy to config.toml and edit.
+# Secrets (AWS keys, GitHub token) live in a SEPARATE secrets.toml (chmod 600).
+
+# Where bare repos live on the host. Created if missing; pushes auto-create
+# repos underneath it.
+repos_root = "/home/youruser/git-ark/repos"
+
+# age PUBLIC key (recipient). The host encrypts to this and can NEVER decrypt.
+# Generate a keypair with `age-keygen`; keep the PRIVATE key OFF this host.
+age_recipient = "age1qxexamplepublickeyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Which refs trigger the durable S3 backup. A push that updates a matching ref
+# is bundled/encrypted/uploaded; every OTHER push still lands on the host (fast,
+# local, LAN-speed) but is not sent to S3 — so agent loops churning on feature
+# branches don't re-upload a whole repo on every commit. A bare name (`main`)
+# matches `refs/heads/main`. Default below = main/master only.
+# Set to ["**"] to back up EVERY push to S3.
+backup_refs = ["refs/heads/main", "refs/heads/master"]
+
+[s3]
+bucket = "git-ark-vault-example"
+region = "us-east-1"
+prefix = "git-ark"
+# Object Lock (WORM) and history retention are configured bucket-side by
+# `scripts/provision.sh` (Object Lock at bucket creation + a lifecycle rule),
+# NOT here. There is no host-side toggle for it.
+
+# GitHub mirroring is now configured PER REPO, in a committed `.git-ark.yml` at
+# the repo's root (see `.git-ark.example.yml`) — not here. A repo's own
+# `github:` block names its owner, visibility, and branches; this central
+# `[github]` block is NOT consulted for mirroring. The keys below are retained
+# only so older configs keep parsing.
+[github]
+owner  = "youruser"
+mirror = [
+    # "myproject",
+]

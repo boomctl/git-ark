@@ -1,0 +1,16 @@
+# git-ark's own backup + mirror policy — git-ark eats its own dogfood.
+# See .git-ark.example.yml for the full schema.
+
+# main earns the durable, client-side-encrypted S3 backup.
+backup_refs:
+  - main
+
+# Public mirror to the boomctl OSS org — every push of `main` publishes to and
+# keeps github.com/boomctl/git-ark in sync.
+github:
+  enabled: true
+  visibility: public
+  owner: boomctl
+  repo: git-ark
+  branches:
+    - main
