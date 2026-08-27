@@ -188,6 +188,64 @@ fn mirror_without_token_fails_with_clear_message() {
 }
 
 #[test]
+fn host_list_with_missing_registry_prints_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    // Never created — registry_path() treats a missing file as empty.
+    let registry_path = dir.path().join("hosts.toml");
+    Command::cargo_bin("git-ark")
+        .unwrap()
+        .args(["host", "list"])
+        .env("GIT_ARK_HOSTS", &registry_path)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn host_list_prints_names_sorted_regardless_of_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry_path = dir.path().join("hosts.toml");
+    // Written directly (not via Registry::save, which already sorts) so this
+    // test actually exercises host_list's own sort rather than riding save's.
+    std::fs::write(
+        &registry_path,
+        "[[hosts]]\n\
+         name = \"zeta\"\n\
+         ssh_target = \"ark@zeta.example.com\"\n\
+         port = 22\n\
+         triple = \"aarch64-unknown-linux-musl\"\n\
+         install_dir = \"/home/ark/git-ark\"\n\
+         \n\
+         [[hosts]]\n\
+         name = \"alpha\"\n\
+         ssh_target = \"ark@alpha.example.com\"\n\
+         port = 2222\n\
+         triple = \"x86_64-unknown-linux-musl\"\n\
+         install_dir = \"/home/ark/git-ark\"\n",
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("git-ark")
+        .unwrap()
+        .args(["host", "list"])
+        .env("GIT_ARK_HOSTS", &registry_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "stdout was: {stdout:?}");
+    assert!(
+        lines[0].starts_with("alpha"),
+        "expected alpha first, got: {lines:?}"
+    );
+    assert!(
+        lines[1].starts_with("zeta"),
+        "expected zeta second, got: {lines:?}"
+    );
+}
+
+#[test]
 fn selfcheck_reports_parseable_health() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml");

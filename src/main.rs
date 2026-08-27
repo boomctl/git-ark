@@ -92,6 +92,13 @@ enum HostAction {
         #[arg(long)]
         binary: PathBuf,
     },
+    /// List the hosts registered with this client.
+    List,
+    /// Remove a host from the registry and drop its `~/.ssh/config` alias.
+    Remove {
+        /// Name of the host to remove (as given to `host add`).
+        name: String,
+    },
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -323,6 +330,8 @@ fn real_main() -> Result<()> {
                 recipient,
                 binary,
             }),
+            HostAction::List => hostcmd::host_list(),
+            HostAction::Remove { name } => hostcmd::host_remove(&name),
         },
         Cmd::Restore {
             repo,

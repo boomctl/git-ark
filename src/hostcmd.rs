@@ -227,12 +227,12 @@ pub fn registry_path() -> Result<PathBuf> {
     Ok(client_keydir()?.join("hosts.toml"))
 }
 
-/// Insert or replace the `Host git-ark-<name>` block within `existing` (the
-/// current contents of `~/.ssh/config`), keyed by its `Host` line. Every
-/// other block is preserved untouched; a prior block for this name is
-/// replaced in place (idempotent re-runs of `host add`), otherwise the new
-/// block is appended.
-pub fn upsert_ssh_config_block(existing: &str, name: &str, block: &str) -> String {
+/// Drop the `Host git-ark-<name>` block from `existing`'s lines, keyed by its
+/// `Host` line — every other block is preserved untouched, and trailing blank
+/// lines are trimmed so callers control spacing after. Shared by
+/// `upsert_ssh_config_block` (which re-appends a fresh block) and
+/// `remove_ssh_config_block` (which doesn't).
+fn drop_ssh_config_block<'a>(existing: &'a str, name: &str) -> Vec<&'a str> {
     let marker = format!("Host git-ark-{name}");
     let lines: Vec<&str> = existing.lines().collect();
     let mut kept: Vec<&str> = Vec::new();
@@ -249,16 +249,37 @@ pub fn upsert_ssh_config_block(existing: &str, name: &str, block: &str) -> Strin
         kept.push(lines[i]);
         i += 1;
     }
-    // Trim trailing blank lines so we control spacing before the new block.
     while matches!(kept.last(), Some(l) if l.trim().is_empty()) {
         kept.pop();
     }
+    kept
+}
 
+/// Insert or replace the `Host git-ark-<name>` block within `existing` (the
+/// current contents of `~/.ssh/config`), keyed by its `Host` line. Every
+/// other block is preserved untouched; a prior block for this name is
+/// replaced in place (idempotent re-runs of `host add`), otherwise the new
+/// block is appended.
+pub fn upsert_ssh_config_block(existing: &str, name: &str, block: &str) -> String {
+    let kept = drop_ssh_config_block(existing, name);
     let mut out = kept.join("\n");
     if !out.is_empty() {
         out.push_str("\n\n");
     }
     out.push_str(block.trim_end());
+    out.push('\n');
+    out
+}
+
+/// Remove the `Host git-ark-<name>` block from `existing`, if present. Every
+/// other block is preserved untouched. Used by `host remove` to drop the
+/// client `~/.ssh/config` alias once a host leaves the registry.
+pub fn remove_ssh_config_block(existing: &str, name: &str) -> String {
+    let kept = drop_ssh_config_block(existing, name);
+    if kept.is_empty() {
+        return String::new();
+    }
+    let mut out = kept.join("\n");
     out.push('\n');
     out
 }
@@ -477,6 +498,50 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// host list / host remove
+// ---------------------------------------------------------------------
+
+/// Print the registry, one line per host as `name  ssh_target  triple`,
+/// sorted by name. `Registry::list()` is in insertion order (only `save`
+/// sorts on disk), so sort a copy here — an empty/missing registry prints
+/// nothing.
+pub fn host_list() -> Result<()> {
+    let registry = Registry::load(&registry_path()?)?;
+    let mut hosts: Vec<&Host> = registry.list().iter().collect();
+    hosts.sort_by(|a, b| a.name.cmp(&b.name));
+    for h in hosts {
+        println!("{}  {}  {}", h.name, h.ssh_target, h.triple);
+    }
+    Ok(())
+}
+
+/// Remove `name` from the registry and drop its `~/.ssh/config` alias block.
+/// A name not in the registry is reported, not an error — there's nothing to
+/// retry.
+pub fn host_remove(name: &str) -> Result<()> {
+    let registry_path = registry_path()?;
+    let mut registry = Registry::load(&registry_path)?;
+    if !registry.remove(name) {
+        println!("no such host: {name}");
+        return Ok(());
+    }
+    registry.save(&registry_path)?;
+
+    // Drop the SSH alias too, if the client has one. A missing ~/.ssh/config
+    // means there's nothing to drop — don't create the file just to remove
+    // from it.
+    let ssh_config_path = client_ssh_config_path()?;
+    if let Ok(existing) = std::fs::read_to_string(&ssh_config_path) {
+        let updated = remove_ssh_config_block(&existing, name);
+        std::fs::write(&ssh_config_path, updated)
+            .with_context(|| format!("writing {}", ssh_config_path.display()))?;
+    }
+
+    println!("removed {name}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,5 +680,29 @@ mod tests {
         let twice = upsert_ssh_config_block(&once, "testbox", block);
         assert_eq!(once, twice);
         assert_eq!(once.matches("Host git-ark-testbox").count(), 1);
+    }
+
+    #[test]
+    fn remove_ssh_config_block_drops_only_the_named_block() {
+        let existing = "Host before\n  HostName a\n\nHost git-ark-testbox\n  HostName old.example.com\n  Port 22\n\nHost after\n  HostName b\n";
+        let out = remove_ssh_config_block(existing, "testbox");
+        assert!(out.contains("Host before"));
+        assert!(out.contains("Host after"));
+        assert!(!out.contains("git-ark-testbox"));
+        assert!(!out.contains("old.example.com"));
+    }
+
+    #[test]
+    fn remove_ssh_config_block_absent_is_a_no_op() {
+        let existing = "Host other\n  HostName elsewhere.example.com\n";
+        let out = remove_ssh_config_block(existing, "testbox");
+        assert_eq!(out, "Host other\n  HostName elsewhere.example.com\n");
+    }
+
+    #[test]
+    fn remove_ssh_config_block_of_only_block_leaves_empty_file() {
+        let existing = "Host git-ark-testbox\n  HostName example.com\n  Port 2222\n";
+        let out = remove_ssh_config_block(existing, "testbox");
+        assert_eq!(out, "");
     }
 }
