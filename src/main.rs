@@ -57,6 +57,11 @@ enum Cmd {
         #[command(subcommand)]
         action: HostAction,
     },
+    /// Manage the client-enforced singleton GitHub mirror.
+    Mirror {
+        #[command(subcommand)]
+        action: MirrorAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +96,11 @@ enum HostAction {
         /// Path to the git-ark binary built for the host's release triple.
         #[arg(long)]
         binary: PathBuf,
+        /// Designate this host the GitHub mirror once it's wired and
+        /// registered. Requires `GIT_ARK_GITHUB_TOKEN`; demotes whichever
+        /// other host currently holds the mirror.
+        #[arg(long)]
+        mirror: bool,
     },
     /// List the hosts registered with this client.
     List,
@@ -112,6 +122,16 @@ enum HostAction {
         #[arg(long)]
         subnet: Option<std::net::Ipv4Addr>,
     },
+}
+
+#[derive(Subcommand)]
+enum MirrorAction {
+    /// Designate `name` the GitHub mirror, demoting whichever other host
+    /// currently holds it (config `mirror=false`, token stripped) before
+    /// promoting `name` (config `mirror=true`, token written).
+    Set { name: String },
+    /// Print the current mirror host's name, or `none`.
+    Show,
 }
 
 fn config_path(explicit: &Option<PathBuf>) -> PathBuf {
@@ -338,6 +358,7 @@ fn real_main() -> Result<()> {
                 endpoint,
                 recipient,
                 binary,
+                mirror,
             } => hostcmd::host_add(&HostAddArgs {
                 name,
                 target,
@@ -349,6 +370,7 @@ fn real_main() -> Result<()> {
                 endpoint,
                 recipient,
                 binary,
+                mirror,
             }),
             HostAction::List => hostcmd::host_list(),
             HostAction::Remove { name } => hostcmd::host_remove(&name),
@@ -357,6 +379,10 @@ fn real_main() -> Result<()> {
                 timeout_ms,
                 subnet,
             } => hostcmd::host_discover(port, timeout_ms, subnet),
+        },
+        Cmd::Mirror { action } => match action {
+            MirrorAction::Set { name } => hostcmd::mirror_set(&name),
+            MirrorAction::Show => hostcmd::mirror_show(),
         },
         Cmd::Restore {
             repo,

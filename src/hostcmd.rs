@@ -341,6 +341,10 @@ pub struct HostAddArgs {
     pub endpoint: Option<String>,
     pub recipient: String,
     pub binary: PathBuf,
+    /// Designate this host the GitHub mirror once it's wired and registered.
+    /// Requires `GIT_ARK_GITHUB_TOKEN`; demotes whichever other host
+    /// currently holds the mirror (see `designate_mirror`).
+    pub mirror: bool,
 }
 
 /// Reject a `name` that isn't safe to use as a client keydir path component,
@@ -568,6 +572,29 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         println!("  disk: {pct}% free ({bytes} bytes)");
     }
 
+    // 11. --mirror: designate this host the GitHub mirror now that it's
+    // wired + registered. Reuses the `registry` already in scope (it holds
+    // the just-upserted host, mirror=false) — `designate_mirror` re-renders
+    // this host's config/secrets a second time (mirror=true, token written)
+    // and, if some other host was the mirror, demotes it too.
+    if args.mirror {
+        let token = match std::env::var("GIT_ARK_GITHUB_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            Some(t) => t,
+            None => bail!(
+                "GIT_ARK_GITHUB_TOKEN must be set to add {} as the GitHub mirror (--mirror); \
+                 the host was still added, just not designated the mirror \
+                 (run `git-ark mirror set {}` once the token is set)",
+                args.name,
+                args.name
+            ),
+        };
+        designate_mirror(&mut registry, &args.name, &token)?;
+        println!("✓ {} designated the GitHub mirror", args.name);
+    }
+
     Ok(())
 }
 
@@ -654,6 +681,155 @@ pub fn host_discover(port: u16, timeout_ms: u64, subnet: Option<std::net::Ipv4Ad
             Some(h) => println!("{s}:{port}  (known: {})", h.name),
             None => println!("{s}:{port}"),
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// mirror designation
+// ---------------------------------------------------------------------
+
+/// Pure singleton-selection: given the current registry and a target host
+/// `name`, decide which host (if any) must be demoted and which is promoted.
+/// `target` is always promoted; `demote` is `Some(other)` when some *other*
+/// host currently holds `mirror==true` — `None` when there's no current
+/// mirror, or the target already is it (both are no-op demotes).
+fn mirror_transition(registry: &Registry, target: &str) -> (Option<String>, String) {
+    let demote = registry
+        .mirror_host()
+        .filter(|h| h.name != target)
+        .map(|h| h.name.clone());
+    (demote, target.to_string())
+}
+
+/// Re-render and re-push `config.toml`/`secrets.toml` to `host` over SSH —
+/// the same shape `host_add` writes on first wiring, minus the probe/binary/
+/// authorized_keys steps (the host is already fully wired; only its config
+/// changes). `config.toml` gets the host's stored S3 values + its per-host
+/// prefix + `mirror`; `secrets.toml` gets the host's write-only S3
+/// credential (from `GIT_ARK_HOST_S3_KEY_ID`/`GIT_ARK_HOST_S3_SECRET` — so
+/// reassigning the mirror needs these set too, same as `host add`) plus
+/// `github_token`.
+fn apply_host_config(host: &Host, mirror: bool, github_token: Option<&str>) -> Result<()> {
+    let key_id = std::env::var("GIT_ARK_HOST_S3_KEY_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let secret = std::env::var("GIT_ARK_HOST_S3_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let (key_id, secret) = match (key_id, secret) {
+        (Some(k), Some(s)) => (k, s),
+        _ => bail!(
+            "GIT_ARK_HOST_S3_KEY_ID and GIT_ARK_HOST_S3_SECRET must both be set to re-apply \
+             {}'s config (changing the mirror re-renders secrets.toml, which needs the host's \
+             write-only S3 credential, not just the GitHub token)",
+            host.name
+        ),
+    };
+
+    let (user, hostname) = parse_target(&host.ssh_target)?;
+    let spec = SshSpec {
+        user,
+        host: hostname,
+        port: Some(host.port),
+        identity: host.identity.clone(),
+    };
+
+    let s3 = S3Config {
+        bucket: host.bucket.clone(),
+        region: host.region.clone(),
+        prefix: per_host_prefix(&host.prefix, &host.name),
+        endpoint: host.endpoint.clone(),
+    };
+    let config_text = render_config(&host.install_dir, &host.recipient, &s3, mirror);
+    ssh_pipe_file(
+        &spec,
+        &format!("{}/config.toml", host.install_dir),
+        config_text.as_bytes(),
+        0o644,
+    )?;
+    let secrets_text = render_secrets(&key_id, &secret, github_token);
+    ssh_pipe_file(
+        &spec,
+        &format!("{}/secrets.toml", host.install_dir),
+        secrets_text.as_bytes(),
+        0o600,
+    )?;
+    Ok(())
+}
+
+/// Enforce the client-enforced single-mirror invariant: reassign the GitHub
+/// mirror designation to `name`, demoting whichever other host currently
+/// holds it — config `mirror=false`, secrets stripped of `[github]` (a
+/// client-side revocation) — before promoting the target — config
+/// `mirror=true`, secrets carrying `github_token`. Bails, before touching any
+/// host, if `name` isn't registered.
+fn designate_mirror(registry: &mut Registry, name: &str, github_token: &str) -> Result<()> {
+    if !registry.list().iter().any(|h| h.name == name) {
+        bail!("no such host: {name} (run `git-ark host list` to see registered hosts)");
+    }
+    let (demote, promote) = mirror_transition(registry, name);
+
+    if let Some(old_name) = &demote {
+        let old = registry
+            .list()
+            .iter()
+            .find(|h| &h.name == old_name)
+            .expect("mirror_transition only names a host present in the registry")
+            .clone();
+        apply_host_config(&old, false, None)?;
+        registry
+            .hosts
+            .iter_mut()
+            .find(|h| h.name == old.name)
+            .expect("just found above")
+            .mirror = false;
+    }
+
+    let target = registry
+        .list()
+        .iter()
+        .find(|h| h.name == promote)
+        .expect("checked at the top of this fn")
+        .clone();
+    apply_host_config(&target, true, Some(github_token))?;
+    registry
+        .hosts
+        .iter_mut()
+        .find(|h| h.name == promote)
+        .expect("just found above")
+        .mirror = true;
+
+    registry.save(&registry_path()?)?;
+    Ok(())
+}
+
+/// Reassign the GitHub mirror to `name`: load the registry, require the host
+/// exists, read the token from `GIT_ARK_GITHUB_TOKEN` (never argv), and
+/// enforce the singleton via `designate_mirror`.
+pub fn mirror_set(name: &str) -> Result<()> {
+    let mut registry = Registry::load(&registry_path()?)?;
+    if !registry.list().iter().any(|h| h.name == name) {
+        bail!("no such host: {name} (run `git-ark host list` to see registered hosts)");
+    }
+    let token = match std::env::var("GIT_ARK_GITHUB_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(t) => t,
+        None => bail!("GIT_ARK_GITHUB_TOKEN must be set to designate a GitHub mirror"),
+    };
+    designate_mirror(&mut registry, name, &token)?;
+    println!("✓ {name} is now the GitHub mirror");
+    Ok(())
+}
+
+/// Print the current mirror host's name, or `none`.
+pub fn mirror_show() -> Result<()> {
+    let registry = Registry::load(&registry_path()?)?;
+    match registry.mirror_host() {
+        Some(h) => println!("{}", h.name),
+        None => println!("none"),
     }
     Ok(())
 }
@@ -949,5 +1125,55 @@ mod tests {
         }
 
         assert_eq!(result.unwrap(), PathBuf::from("/Users/win"));
+    }
+
+    fn test_host(name: &str, mirror: bool) -> Host {
+        Host {
+            name: name.to_string(),
+            ssh_target: format!("ark@{name}.example.com"),
+            port: 22,
+            identity: None,
+            triple: "x86_64-unknown-linux-musl".to_string(),
+            install_dir: "/home/ark/git-ark".to_string(),
+            recipient: "age1abc".to_string(),
+            bucket: "b".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "git-ark".to_string(),
+            endpoint: None,
+            mirror,
+        }
+    }
+
+    #[test]
+    fn mirror_transition_promotes_target_when_no_current_mirror() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+        registry.upsert(test_host("ec2", false));
+
+        let (demote, promote) = mirror_transition(&registry, "ec2");
+        assert_eq!(demote, None);
+        assert_eq!(promote, "ec2");
+    }
+
+    #[test]
+    fn mirror_transition_demotes_a_different_current_mirror() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", true));
+        registry.upsert(test_host("ec2", false));
+
+        let (demote, promote) = mirror_transition(&registry, "ec2");
+        assert_eq!(demote, Some("nas".to_string()));
+        assert_eq!(promote, "ec2");
+    }
+
+    #[test]
+    fn mirror_transition_is_a_no_op_demote_when_target_already_mirror() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+        registry.upsert(test_host("ec2", true));
+
+        let (demote, promote) = mirror_transition(&registry, "ec2");
+        assert_eq!(demote, None);
+        assert_eq!(promote, "ec2");
     }
 }
