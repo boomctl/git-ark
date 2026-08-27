@@ -237,6 +237,7 @@ mod plan_tests {
                 bucket: "b".into(),
                 region: "r".into(),
                 prefix: "git-ark".into(),
+                endpoint: None,
             },
             github: GithubConfig::default(),
             backup_refs: Vec::new(),

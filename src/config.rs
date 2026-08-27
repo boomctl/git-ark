@@ -44,6 +44,10 @@ pub struct S3Config {
     pub region: String,
     #[serde(default = "default_prefix")]
     pub prefix: String,
+    /// Optional S3-compatible endpoint (MinIO, R2, B2, Wasabi, localstack). When
+    /// set, requests use path-style addressing. Omitted → real AWS S3.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 fn default_prefix() -> String {
@@ -228,6 +232,27 @@ region = "us-east-1"
         );
         assert_eq!(c.disk_warn_percent, 15);
         assert_eq!(c.disk_warn_min_free_bytes, 10 * 1024 * 1024 * 1024);
+        assert_eq!(c.s3.endpoint, None);
+    }
+
+    #[test]
+    fn s3_endpoint_parses_when_present() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(
+            d.path(),
+            "config.toml",
+            r#"
+repos_root = "/srv/repos"
+age_recipient = "age1qqqexamplepublickey"
+[s3]
+bucket = "b"
+region = "us-east-1"
+endpoint = "http://minio:9000"
+"#,
+            0o644,
+        );
+        let c = Config::load(&p).unwrap();
+        assert_eq!(c.s3.endpoint.as_deref(), Some("http://minio:9000"));
     }
 
     #[test]

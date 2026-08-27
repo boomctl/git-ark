@@ -44,8 +44,11 @@ pub struct S3ObjectStore {
 
 impl S3ObjectStore {
     pub fn new(cfg: &S3Config, creds: &AwsSecrets) -> Result<Self> {
-        // Allow a MinIO/localstack override for tests; default to real AWS.
-        let endpoint_override = std::env::var("GIT_ARK_S3_ENDPOINT").ok();
+        // Endpoint precedence: config → env (back-compat for tests) → real AWS.
+        let endpoint_override = cfg
+            .endpoint
+            .clone()
+            .or_else(|| std::env::var("GIT_ARK_S3_ENDPOINT").ok());
         let endpoint = match &endpoint_override {
             Some(e) => e.clone(),
             None => format!("https://s3.{}.amazonaws.com", cfg.region),
@@ -158,6 +161,7 @@ mod tests {
             bucket: "b".into(),
             region: "us-east-1".into(),
             prefix: "git-ark".into(),
+            endpoint: None,
         };
         let creds = AwsSecrets {
             access_key_id: "AKIAEXAMPLELEAKCHECK".into(),

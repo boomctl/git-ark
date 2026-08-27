@@ -15,6 +15,7 @@ fn minio_put_get_list_roundtrip() {
         bucket: "git-ark-test".into(),
         region: "us-east-1".into(),
         prefix: "git-ark".into(),
+        endpoint: None,
     };
     // Endpoint override for MinIO comes from GIT_ARK_S3_ENDPOINT (see s3.rs).
     let creds = AwsSecrets {

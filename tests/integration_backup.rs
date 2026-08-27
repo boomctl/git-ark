@@ -48,6 +48,7 @@ fn backup_uploads_encrypted_bundle_that_restores() {
             bucket: "b".into(),
             region: "us-east-1".into(),
             prefix: "git-ark".into(),
+            endpoint: None,
         },
         github: GithubConfig::default(),
         backup_refs: Vec::new(),
