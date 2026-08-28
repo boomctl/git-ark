@@ -265,6 +265,11 @@ fn push_command(
         .arg("-c")
         .arg(r#"credential.helper=!f() { echo username=x-access-token; echo "password=$GIT_ARK_TOKEN"; }; f"#)
         .arg("push")
+        // Also mirror annotated tags reachable from the pushed branches — so a
+        // release tag (e.g. `v0.2.0`) reaches GitHub and triggers the release
+        // workflow. `--follow-tags` only pushes annotated, reachable, not-yet-
+        // present tags, so it never surprises with lightweight/unrelated tags.
+        .arg("--follow-tags")
         .arg(format!("https://github.com/{owner}/{repo_name}.git"))
         .args(branches)
         .env("GIT_ARK_TOKEN", token)
