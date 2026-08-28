@@ -472,7 +472,7 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
     let pub_path = keydir.join(format!("{}.pub", args.name));
     if !key_path.exists() {
         let status = Command::new("ssh-keygen")
-            .args(["-t", "ed25519", "-N", ""])
+            .args(["-t", "ed25519", "-N", "", "-q"])
             .arg("-f")
             .arg(&key_path)
             .arg("-C")

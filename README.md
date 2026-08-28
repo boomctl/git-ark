@@ -15,6 +15,10 @@ wire it with one command, and push. A dead disk, a stolen box, or a fat-fingered
 `rm -rf` can't take everything — and nothing touches the public internet unless
 you opt a repo in by name.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="git-ark: wire a host, then one git push lands encrypted in your own S3 vault" width="820">
+</p>
+
 ## Install
 
 Installs the **client** — the command you run on your own machine. Hosts get
