@@ -131,6 +131,7 @@ privilege parts ever reach a host.
 | `git-ark host discover` | scan your LAN for sshable hosts to add |
 | `git-ark host setup-key <target>` | generate + copy a client SSH key to a box you can't key-auth into yet |
 | `git-ark host add <name> <target> …` | probe → ship binary → install forced-command key → write config/secret → verify → register |
+| `git-ark host adopt <name> <target>` | register an already-deployed host without touching it — recovery, or a host wired before the registry existed |
 | `git-ark host list` / `host remove <name>` | the host registry |
 | `git-ark route <repo> --to <names>` | point a repo's `git push git-ark` at one or more hosts |
 | `git-ark mirror set <name>` / `mirror show` | designate / show the single GitHub-mirror host (token follows it, revoked from the old) |

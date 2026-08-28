@@ -19,7 +19,7 @@ use crate::registry::{Host, Registry};
 use crate::release;
 use crate::repo_policy::read_repo_policy;
 use crate::sshdiag::{classify_ssh_error, diagnosis_message, SshDiagnosis};
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -634,6 +634,160 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// host adopt — register an already-deployed host without touching it
+// ---------------------------------------------------------------------
+
+/// Inputs for `host adopt`.
+pub struct HostAdoptArgs {
+    pub name: String,
+    pub target: String,
+    pub port: Option<u16>,
+    pub identity: Option<PathBuf>,
+    /// Path to the host's `config.toml`; if omitted, adopt reads it from the
+    /// git-ark forced-command line in the host's `authorized_keys`.
+    pub config: Option<String>,
+}
+
+/// Adopt an already-deployed host into the client registry — the recovery path
+/// (a lost registry) and the way to bring in a host wired before the registry
+/// existed. Reconstructs the registry entry from the host's deployed surface
+/// over the control channel, verifies with `selfcheck`, and registers it.
+///
+/// It is **read-only on the host** and writes **nothing** to the client's ssh
+/// config (no `git-ark-<name>` alias) — so existing remotes and aliases are
+/// untouched. `status`/`upgrade` ride the control channel and need no alias.
+pub fn host_adopt(args: &HostAdoptArgs) -> Result<()> {
+    validate_host_name(&args.name)?;
+    let (user, host) = parse_target(&args.target)?;
+    let spec = SshSpec {
+        user,
+        host,
+        port: args.port,
+        identity: args.identity.clone(),
+    };
+
+    // 1. Where does git-ark live on the host? Explicit --config, else parse the
+    //    forced-command line in authorized_keys.
+    let config_path = match &args.config {
+        Some(c) => c.clone(),
+        None => {
+            let ak = ssh_run(&spec, "cat ~/.ssh/authorized_keys 2>/dev/null || true")?;
+            parse_forced_command_config(&ak).ok_or_else(|| {
+                anyhow!(
+                    "no git-ark forced-command line found in {}'s authorized_keys — \
+                     pass --config <path-to-config.toml> to point me at it",
+                    args.target
+                )
+            })?
+        }
+    };
+    let install_dir = std::path::Path::new(&config_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .ok_or_else(|| anyhow!("can't derive the install dir from {config_path}"))?
+        .to_string();
+
+    // 2. Triple from uname.
+    let triple = triple_from_uname(&ssh_run(&spec, "uname -s; uname -m")?)?;
+
+    // 3. Read the host's config.toml → the vault fields for a complete entry.
+    let cfg_text = ssh_run(&spec, &format!("cat {}", shell_words::quote(&config_path)))?;
+    let cfg: toml::Value =
+        toml::from_str(&cfg_text).map_err(|e| anyhow!("parsing the host's config.toml: {e}"))?;
+    let str_at = |v: Option<&toml::Value>| v.and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let s3 = cfg.get("s3");
+    let recipient = str_at(cfg.get("age_recipient"));
+    let bucket = str_at(s3.and_then(|v| v.get("bucket")));
+    let region = str_at(s3.and_then(|v| v.get("region")));
+    let prefix = str_at(s3.and_then(|v| v.get("prefix")));
+    let endpoint = s3
+        .and_then(|v| v.get("endpoint"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let mirror = cfg.get("mirror").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // 4. Verify with selfcheck (read-only). Use the exact config path found.
+    let bin_q = shell_words::quote(&format!("{install_dir}/bin/git-ark")).into_owned();
+    let cfg_q = shell_words::quote(&config_path).into_owned();
+    let selfcheck = ssh_run(&spec, &format!("{bin_q} selfcheck --config {cfg_q}"))
+        .context("running the host's git-ark selfcheck")?;
+    if !selfcheck.contains("config_valid=true") {
+        bail!(
+            "selfcheck didn't confirm a working git-ark at {install_dir} on {}:\n{}",
+            args.target,
+            selfcheck.trim()
+        );
+    }
+    let version = parse_kv(&selfcheck)
+        .get("git_ark_version")
+        .cloned()
+        .unwrap_or_else(|| "?".into());
+
+    // 5. Register — the ONLY thing written. No ssh alias, no host mutation.
+    let registry_path = registry_path()?;
+    let mut registry = Registry::load(&registry_path)?;
+    registry.upsert(Host {
+        name: args.name.clone(),
+        ssh_target: args.target.clone(),
+        port: args.port.unwrap_or(22),
+        identity: args.identity.clone(),
+        triple,
+        install_dir,
+        recipient,
+        bucket,
+        region,
+        prefix,
+        endpoint,
+        mirror,
+    });
+    registry.save(&registry_path)?;
+
+    println!(
+        "✓ adopted '{}' (git-ark {version}) — registered from its deployed config; \
+         nothing on the host or in your ssh config was touched",
+        args.name
+    );
+    println!("  it now appears in `git-ark status` and can be `git-ark upgrade`d.");
+    if mirror {
+        println!("  (it holds the GitHub mirror.)");
+    }
+    Ok(())
+}
+
+/// Extract the `--config <path>` from a git-ark forced-command line in an
+/// `authorized_keys` body. The path ends at the first quote or whitespace.
+pub fn parse_forced_command_config(authorized_keys: &str) -> Option<String> {
+    for line in authorized_keys.lines() {
+        if !line.contains("git-ark") {
+            continue;
+        }
+        if let Some(idx) = line.find("--config ") {
+            let rest = &line[idx + "--config ".len()..];
+            let end = rest
+                .find(|c: char| c == '"' || c.is_whitespace())
+                .unwrap_or(rest.len());
+            let path = &rest[..end];
+            if !path.is_empty() {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Map `uname -s` / `uname -m` output (two lines) to a git-ark release triple.
+pub fn triple_from_uname(uname: &str) -> Result<String> {
+    let mut lines = uname.lines().map(str::trim);
+    let os = lines.next().unwrap_or("");
+    let arch = lines.next().unwrap_or("");
+    match (os, arch) {
+        ("Linux", "x86_64") => Ok("x86_64-unknown-linux-musl".to_string()),
+        ("Linux", "aarch64" | "arm64") => Ok("aarch64-unknown-linux-musl".to_string()),
+        _ => bail!("unsupported host {os}/{arch} — git-ark hosts are Linux x86_64 or aarch64"),
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1489,6 +1643,37 @@ mod tests {
     fn parse_target_rejects_empty_user_or_host() {
         assert!(parse_target("@example.com").is_err());
         assert!(parse_target("ark@").is_err());
+    }
+
+    #[test]
+    fn adopt_parses_config_path_from_forced_command() {
+        let ak = "ssh-rsa AAAA someone@key\n\
+            command=\"/home/op/git-ark/bin/git-ark shell --config /home/op/git-ark/config.toml\",no-pty,no-port-forwarding ssh-ed25519 AAAA git-ark\n";
+        assert_eq!(
+            parse_forced_command_config(ak).as_deref(),
+            Some("/home/op/git-ark/config.toml")
+        );
+    }
+
+    #[test]
+    fn adopt_config_path_none_without_a_git_ark_line() {
+        assert_eq!(
+            parse_forced_command_config("ssh-ed25519 AAAA me@host\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn adopt_maps_uname_to_triple() {
+        assert_eq!(
+            triple_from_uname("Linux\nx86_64").unwrap(),
+            "x86_64-unknown-linux-musl"
+        );
+        assert_eq!(
+            triple_from_uname("Linux\naarch64").unwrap(),
+            "aarch64-unknown-linux-musl"
+        );
+        assert!(triple_from_uname("Darwin\narm64").is_err());
     }
 
     #[test]

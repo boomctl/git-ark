@@ -1,7 +1,9 @@
 # Design: `git-ark host adopt`
 
-> **Status: proposal / not yet implemented.** Captures a design worked out in
-> conversation. Describes a future `git-ark` command.
+> **Status: shipped.** `git-ark host adopt <name> <target>` is implemented, and
+> verified to touch nothing on the host or in `~/.ssh/config` (a byte-identical
+> config before and after). The data-channel wrinkle below remains a follow-up;
+> `status`/`upgrade` (control channel) work today.
 
 ## Motivation
 

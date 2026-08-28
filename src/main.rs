@@ -171,6 +171,23 @@ enum HostAction {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Register an already-deployed host (one wired by hand, or after a lost
+    /// registry) without touching it. Read-only on the host; writes only the
+    /// registry entry — no ssh alias, so existing remotes are untouched.
+    Adopt {
+        /// Name for this host in the registry.
+        name: String,
+        /// SSH target, `user@host` — your normal interactive login.
+        target: String,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        identity: Option<PathBuf>,
+        /// Path to the host's config.toml; inferred from the forced-command
+        /// line in authorized_keys when omitted.
+        #[arg(long)]
+        config: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -468,6 +485,19 @@ fn real_main() -> Result<()> {
                 subnet,
             } => hostcmd::host_discover(port, timeout_ms, subnet),
             HostAction::SetupKey { target, port } => hostcmd::host_setup_key(&target, port),
+            HostAction::Adopt {
+                name,
+                target,
+                port,
+                identity,
+                config,
+            } => hostcmd::host_adopt(&hostcmd::HostAdoptArgs {
+                name,
+                target,
+                port,
+                identity,
+                config,
+            }),
         },
         Cmd::Mirror { action } => match action {
             MirrorAction::Set { name } => hostcmd::mirror_set(&name),
