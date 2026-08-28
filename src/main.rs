@@ -51,6 +51,10 @@ enum Cmd {
     },
     /// Report host health as `key=value` lines (for the client control plane).
     Selfcheck,
+    /// Fleet health/liveness/drift dashboard: reach each registered host over
+    /// the control channel, run its own `selfcheck`, and report version,
+    /// disk, and mirror status. Never fails on an unreachable host.
+    Status,
     /// Manage git-ark hosts from this client (control plane). Cross-platform:
     /// this is the client's tool, not the host-only shim above.
     Host {
@@ -365,6 +369,7 @@ fn real_main() -> Result<()> {
             println!("config_valid=true");
             Ok(())
         }
+        Cmd::Status => hostcmd::status(),
         Cmd::Host { action } => match action {
             HostAction::Add {
                 name,

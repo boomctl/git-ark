@@ -153,7 +153,9 @@ pub fn disk_line(usage: crate::disk::DiskUsage, low: bool) -> String {
 }
 
 /// Human-readable bytes, binary units, one decimal (e.g. "1.8 GB", "56.0 TB").
-fn human_bytes(n: u64) -> String {
+/// `pub(crate)` so `hostcmd::format_status_row` can reuse it for `status`'s
+/// free-size column instead of re-implementing the same formatting.
+pub(crate) fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;
     let mut i = 0;

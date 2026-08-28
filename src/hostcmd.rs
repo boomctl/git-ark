@@ -693,6 +693,119 @@ pub fn host_discover(port: u16, timeout_ms: u64, subnet: Option<std::net::Ipv4Ad
 }
 
 // ---------------------------------------------------------------------
+// status — fleet health/liveness/drift
+// ---------------------------------------------------------------------
+
+/// One host's status, as `probe_status` diagnoses it. `Reachable` carries
+/// exactly what the host's own `selfcheck` reported; `Broken` is a real ssh
+/// connection that came back unhealthy (selfcheck errored); `Unreachable` is
+/// no connection at all — the graduated diagnosis `status` needs to tell
+/// "the box is off" from "the box is up but git-ark is broken on it".
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostStatus {
+    Reachable {
+        version: String,
+        disk_free: u64,
+        disk_low: bool,
+        config_valid: bool,
+    },
+    Broken(String),
+    Unreachable,
+}
+
+/// Probe `host` over the control channel: run its own `selfcheck` and parse
+/// the result. Never errors — a dead or misconfigured host is a `HostStatus`
+/// variant, not a `Result::Err`, so `status()` can report the whole fleet
+/// even when part of it is down.
+pub fn probe_status(host: &Host) -> HostStatus {
+    let (user, hostname) = match parse_target(&host.ssh_target) {
+        Ok(v) => v,
+        Err(e) => return HostStatus::Broken(e.to_string()),
+    };
+    let spec = SshSpec {
+        user,
+        host: hostname,
+        port: Some(host.port),
+        identity: host.identity.clone(),
+    };
+
+    match ssh_run(&spec, &selfcheck_command(&host.install_dir)) {
+        Ok(out) => {
+            let kv = parse_kv(&out);
+            let version = kv.get("git_ark_version").cloned().unwrap_or_default();
+            let disk_free = kv
+                .get("disk_free_bytes")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let disk_low = kv.get("disk_low").map(String::as_str) == Some("true");
+            let config_valid = kv.get("config_valid").map(String::as_str) == Some("true");
+            HostStatus::Reachable {
+                version,
+                disk_free,
+                disk_low,
+                config_valid,
+            }
+        }
+        // The selfcheck itself failed (bad config, missing binary, …) —
+        // distinguish that from no connection at all with a cheap `true`.
+        Err(_) => match ssh_run(&spec, "true") {
+            Ok(_) => HostStatus::Broken("selfcheck failed".to_string()),
+            Err(_) => HostStatus::Unreachable,
+        },
+    }
+}
+
+/// Render one `status` row. PURE — `probe_status` does the SSH; this only
+/// formats what it found. `mirror` (from the registry entry, not carried on
+/// `HostStatus`) appends a `★ mirror` marker.
+pub fn format_status_row(name: &str, mirror: bool, s: &HostStatus) -> String {
+    let mirror_marker = if mirror { "  ★ mirror" } else { "" };
+    match s {
+        HostStatus::Reachable {
+            version,
+            disk_free,
+            disk_low,
+            config_valid,
+        } => {
+            let mark = if *disk_low { "⚠" } else { "✓" };
+            let mut line = format!(
+                "{mark} {name}  v{version}  {} free",
+                crate::backup::human_bytes(*disk_free)
+            );
+            if *disk_low {
+                line.push_str("  disk low");
+            }
+            if !config_valid {
+                line.push_str("  config invalid");
+            }
+            line.push_str(mirror_marker);
+            line
+        }
+        HostStatus::Broken(reason) => format!("✗ {name}  broken: {reason}{mirror_marker}"),
+        HostStatus::Unreachable => format!("✗ {name}  unreachable{mirror_marker}"),
+    }
+}
+
+/// Print a fleet health/liveness/drift dashboard: one row per registered
+/// host, probed over the control channel. Never fails the process on a
+/// dead/broken host — that's the point of the dashboard — only on a genuine
+/// local error (e.g. an unreadable registry).
+pub fn status() -> Result<()> {
+    let registry = Registry::load(&registry_path()?)?;
+    let mut hosts: Vec<&Host> = registry.list().iter().collect();
+    if hosts.is_empty() {
+        println!("no hosts — run `git-ark host add`");
+        return Ok(());
+    }
+    hosts.sort_by(|a, b| a.name.cmp(&b.name));
+    for h in hosts {
+        let s = probe_status(h);
+        println!("{}", format_status_row(&h.name, h.mirror, &s));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // mirror designation
 // ---------------------------------------------------------------------
 
@@ -1381,6 +1494,71 @@ mod tests {
         let (demote, promote) = mirror_transition(&registry, "ec2");
         assert_eq!(demote, None);
         assert_eq!(promote, "ec2");
+    }
+
+    // -----------------------------------------------------------------
+    // status
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn format_status_row_reachable_healthy() {
+        let s = HostStatus::Reachable {
+            version: "0.1.0".to_string(),
+            disk_free: 60_000_000_000_000,
+            disk_low: false,
+            config_valid: true,
+        };
+        let row = format_status_row("nas", false, &s);
+        assert!(row.contains("nas"));
+        assert!(row.contains('✓'));
+        assert!(row.contains("0.1.0"));
+        assert!(
+            row.contains("54.6 TB"),
+            "expected a human free size, got: {row}"
+        );
+        assert!(!row.contains('★'));
+    }
+
+    #[test]
+    fn format_status_row_reachable_marks_mirror() {
+        let s = HostStatus::Reachable {
+            version: "0.1.0".to_string(),
+            disk_free: 60_000_000_000_000,
+            disk_low: false,
+            config_valid: true,
+        };
+        let row = format_status_row("nas", true, &s);
+        assert!(row.contains('★'));
+        assert!(row.to_lowercase().contains("mirror"));
+    }
+
+    #[test]
+    fn format_status_row_reachable_disk_low_warns() {
+        let s = HostStatus::Reachable {
+            version: "0.1.0".to_string(),
+            disk_free: 1_000_000_000,
+            disk_low: true,
+            config_valid: true,
+        };
+        let row = format_status_row("nas", false, &s);
+        assert!(row.contains('⚠'));
+    }
+
+    #[test]
+    fn format_status_row_broken_shows_reason() {
+        let s = HostStatus::Broken("selfcheck: config invalid".to_string());
+        let row = format_status_row("nas", false, &s);
+        assert!(row.starts_with('✗'));
+        assert!(row.to_lowercase().contains("broken"));
+        assert!(row.contains("selfcheck: config invalid"));
+    }
+
+    #[test]
+    fn format_status_row_unreachable() {
+        let s = HostStatus::Unreachable;
+        let row = format_status_row("nas", false, &s);
+        assert!(row.starts_with('✗'));
+        assert!(row.to_lowercase().contains("unreachable"));
     }
 
     #[test]
