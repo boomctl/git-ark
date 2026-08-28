@@ -19,10 +19,15 @@ fi
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker build -q -t git-ark-testhost "$HERE" >/dev/null
 # Optionally join a user-defined network (so it can reach a MinIO sidecar by
-# name) — set NETWORK to enable; the container is reachable there as `testhost`.
-net_args=()
-[ -n "${NETWORK:-}" ] && net_args=(--network "$NETWORK" --network-alias "$NAME")
-docker run -d --name "$NAME" -p "$PORT:22" "${net_args[@]}" git-ark-testhost >/dev/null
+# name) — set NETWORK to enable; the container is reachable there as "$NAME".
+# (An if/else rather than an array to avoid the empty-array-under-`set -u`
+# unbound-variable quirk in macOS's bash 3.2 when NETWORK is unset.)
+if [ -n "${NETWORK:-}" ]; then
+  docker run -d --name "$NAME" -p "$PORT:22" \
+    --network "$NETWORK" --network-alias "$NAME" git-ark-testhost >/dev/null
+else
+  docker run -d --name "$NAME" -p "$PORT:22" git-ark-testhost >/dev/null
+fi
 
 # Authorize the test key for interactive login as `ark` (the control channel).
 docker exec "$NAME" bash -c 'mkdir -p /home/ark/.ssh && chmod 700 /home/ark/.ssh'
