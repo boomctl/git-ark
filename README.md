@@ -20,23 +20,35 @@ you opt a repo in by name.
 Installs the **client** — the command you run on your own machine. Hosts get
 their binary automatically from `git-ark host add`, so they never need this.
 
+**macOS / Linux** — Homebrew, or a checksum-verified download:
+
 ```sh
-# macOS / Linux — download the latest release binary, checksum-verified:
+brew tap boomctl/tap
+brew install git-ark
+# Homebrew 6+ gates third-party taps — if it refuses, run: brew trust boomctl/tap
+
+# or, without Homebrew:
 curl -fsSL https://raw.githubusercontent.com/boomctl/git-ark/main/install.sh | sh
 ```
+
+**Windows** — Scoop, or PowerShell:
+
 ```powershell
-# Windows (PowerShell):
+scoop bucket add git-ark https://github.com/boomctl/scoop-bucket; scoop install git-ark
+
+# or:
 irm https://raw.githubusercontent.com/boomctl/git-ark/main/install.ps1 | iex
 ```
+
+**With Rust:**
+
 ```sh
-# With Rust (once published to crates.io):
-cargo install git-ark        # build from source
+cargo install git-ark        # build from source (crates.io)
 cargo binstall git-ark       # prebuilt release binary, no compile
 ```
 
 Or grab a binary directly from the
-[releases](https://github.com/boomctl/git-ark/releases). Homebrew and Scoop taps
-are on the way.
+[releases](https://github.com/boomctl/git-ark/releases).
 
 ## Quick start
 
