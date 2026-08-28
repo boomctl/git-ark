@@ -110,10 +110,20 @@ key-holder-only out.
 The vault is **any S3-compatible object store** — AWS S3 by default, or MinIO,
 Cloudflare R2, Backblaze B2, Wasabi, etc. by setting `s3.endpoint` in
 `config.toml` (path-style addressing is selected automatically for a custom
-endpoint). The least-privilege, write-only property is illustrated here with an
-AWS IAM user; other stores express the same guarantee with their own scoped
-access keys. Only the AWS **provisioning** helper is AWS-specific — the storage
-path itself speaks plain S3 to whatever endpoint you point it at.
+endpoint). Only the AWS **provisioning** helper is AWS-specific — the storage
+path speaks plain S3 to whatever endpoint you point it at.
+
+**The write-only guarantee is not equally expressible everywhere.** It relies on
+AWS IAM's per-action scoping (`s3:PutObject` and nothing else). Some
+S3-compatible stores have coarser credentials — Cloudflare R2, for example,
+offers "Object Read & Write" with no put-only tier, so a token that can write can
+also read, list, and delete. On such backends that defense-in-depth layer is
+lost: a compromised host can enumerate and delete objects. **What does not change
+is confidentiality** — backups are age-encrypted client-side to a key the host
+never holds, so even a fully-readable bucket yields only ciphertext. So on a
+coarse-token store you keep durable, confidential backups but lose the
+"compromised host can't read/list/delete" hardening; AWS (or any store with
+put-only credentials) keeps all of it.
 
 ### Restore
 
