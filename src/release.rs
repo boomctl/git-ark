@@ -86,10 +86,9 @@ pub fn fetch_host_binary(triple: &str) -> Result<Vec<u8>> {
              --binary <path> to supply one."
         )
     })?;
-    let sums = String::from_utf8(
-        http_get_bytes(&sums_url).context("fetching the release SHA256SUMS")?,
-    )
-    .context("release SHA256SUMS is not valid UTF-8")?;
+    let sums =
+        String::from_utf8(http_get_bytes(&sums_url).context("fetching the release SHA256SUMS")?)
+            .context("release SHA256SUMS is not valid UTF-8")?;
 
     let want = expected_sha256(&sums, &asset)
         .ok_or_else(|| anyhow!("no checksum for {asset} in the release SHA256SUMS"))?;

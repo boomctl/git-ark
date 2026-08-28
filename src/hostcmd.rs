@@ -11,12 +11,12 @@
 
 use crate::config::S3Config;
 use crate::github;
-use crate::release;
 use crate::hostspec::{
     assess, forced_command_line, parse_probe, per_host_prefix, render_config, render_secrets,
     ssh_config_block, PROBE_SCRIPT,
 };
 use crate::registry::{Host, Registry};
+use crate::release;
 use crate::repo_policy::read_repo_policy;
 use crate::sshdiag::{classify_ssh_error, diagnosis_message, SshDiagnosis};
 use anyhow::{bail, Context, Result};
