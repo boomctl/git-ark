@@ -551,7 +551,12 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         name: args.name.clone(),
         ssh_target: args.target.clone(),
         port,
-        identity: Some(key_path.clone()),
+        // The CONTROL-channel identity (the operator's interactive key), NOT the
+        // forced-command key: management ops (apply_host_config / mirror set /
+        // upgrade) run arbitrary commands and must use the control channel, or
+        // they hit the git-only forced-command shim. The forced-command key is
+        // used solely by the git-push ssh alias (`git-ark-<name>`).
+        identity: args.identity.clone(),
         triple: plan.triple.clone(),
         install_dir: plan.install_dir.clone(),
         recipient: args.recipient.clone(),
@@ -786,6 +791,10 @@ fn designate_mirror(registry: &mut Registry, name: &str, github_token: &str) -> 
             .find(|h| h.name == old.name)
             .expect("just found above")
             .mirror = false;
+        // Persist the demotion NOW: if the promote below fails, the on-disk
+        // registry must not still claim this demoted, token-stripped host is the
+        // mirror. Worst case is a transient no-mirror that a re-run repairs.
+        registry.save(&registry_path()?)?;
     }
 
     let target = registry
@@ -794,7 +803,12 @@ fn designate_mirror(registry: &mut Registry, name: &str, github_token: &str) -> 
         .find(|h| h.name == promote)
         .expect("checked at the top of this fn")
         .clone();
-    apply_host_config(&target, true, Some(github_token))?;
+    apply_host_config(&target, true, Some(github_token)).with_context(|| {
+        format!(
+            "demoted the previous mirror but could not promote {promote} — the fleet has no \
+             mirror right now; re-run `git-ark mirror set {promote}` once it is reachable"
+        )
+    })?;
     registry
         .hosts
         .iter_mut()
@@ -894,7 +908,12 @@ pub fn route(repo_path: &Path, host_names: &[String]) -> Result<()> {
         );
     }
 
-    let repo = repo_path
+    // Canonicalize first so a relative path like "." resolves to a real
+    // directory name — `Path::new(".").file_name()` is `None`.
+    let abs = repo_path
+        .canonicalize()
+        .with_context(|| format!("resolving {}", repo_path.display()))?;
+    let repo = abs
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow::anyhow!("{} has no usable directory name", repo_path.display()))?
@@ -961,7 +980,9 @@ fn format_check(c: &github::TokenCheck, owner: &str, repo: &str) -> String {
             format!("✗ no push access to {owner}/{repo}")
         }
         github::RepoAccess::Absent => format!(
-            "⚠ {owner}/{repo} absent — will be created on first mirror; verify create rights"
+            "⚠ {owner}/{repo}: 404 — absent (created on first mirror) OR the token can't see it \
+             (missing org access / unauthorized SSO PAT). GitHub returns 404 either way — verify \
+             before relying on it"
         ),
         github::RepoAccess::Error(e) => format!("✗ {owner}/{repo}: {e}"),
     });
@@ -997,8 +1018,9 @@ pub fn mirror_check(repo_path: &Path) -> Result<()> {
         })?;
     let repo_name = g.repo.clone().unwrap_or_else(|| {
         repo_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_default()
     });
 
@@ -1486,7 +1508,10 @@ mod tests {
     fn format_check_repo_absent() {
         let c = token_check(true, github::RepoAccess::Absent, None, false);
         let out = format_check(&c, "acme", "app");
-        assert!(out.contains("⚠ acme/app absent"));
+        // A 404 is a soft warning (not a hard ✗) but must name the org-access /
+        // SSO ambiguity, not assert the repo will be created.
+        assert!(out.contains("⚠ acme/app"));
+        assert!(out.contains("404") && out.contains("org access"));
     }
 
     #[test]
