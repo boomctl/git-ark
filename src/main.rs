@@ -150,6 +150,17 @@ enum HostAction {
         #[arg(long)]
         subnet: Option<std::net::Ipv4Addr>,
     },
+    /// Generate a client SSH key (if none exists) and copy it to `target`
+    /// with `ssh-copy-id`, so a box without key auth set up can get to
+    /// "sshable" without leaving git-ark. Prompts (password, passphrase)
+    /// reach your terminal directly — git-ark never sees them.
+    SetupKey {
+        /// SSH target to set up, `user@host` — the same target you'll pass
+        /// to `host add` once this succeeds.
+        target: String,
+        #[arg(long)]
+        port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -416,6 +427,7 @@ fn real_main() -> Result<()> {
                 timeout_ms,
                 subnet,
             } => hostcmd::host_discover(port, timeout_ms, subnet),
+            HostAction::SetupKey { target, port } => hostcmd::host_setup_key(&target, port),
         },
         Cmd::Mirror { action } => match action {
             MirrorAction::Set { name } => hostcmd::mirror_set(&name),

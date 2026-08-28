@@ -1265,6 +1265,159 @@ pub fn mirror_check(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// host setup-key — generate + copy a client SSH key to a host
+// ---------------------------------------------------------------------
+
+/// What `pick_or_plan_keygen` decided for the client's control key: reuse
+/// an existing one, or generate a fresh one. Both carry the PRIVATE key
+/// path — its public half is always `<path>.pub`, the standard ssh-keygen
+/// naming.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyPlan {
+    Reuse(PathBuf),
+    Generate(PathBuf),
+}
+
+/// Candidate private-key basenames in `~/.ssh`, most-preferred first — the
+/// same three `ssh` itself tries by default.
+const KEY_CANDIDATES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// Decide which client key `host setup-key` should use. PURE: `existing` is
+/// the set of candidate basenames the caller found actually present in
+/// `ssh_dir` — this only picks among them. Reuses the first preferred name
+/// present (ed25519 > ecdsa > rsa); plans to generate `id_ed25519` when none
+/// exist. Never plans to overwrite an existing key.
+pub fn pick_or_plan_keygen(ssh_dir: &Path, existing: &[String]) -> KeyPlan {
+    for candidate in KEY_CANDIDATES {
+        if existing.iter().any(|e| e == candidate) {
+            return KeyPlan::Reuse(ssh_dir.join(candidate));
+        }
+    }
+    KeyPlan::Generate(ssh_dir.join("id_ed25519"))
+}
+
+/// Print the public key at `pub_path` plus the manual fallback instructions
+/// for `target` — used both when `ssh-copy-id` fails/is missing and when the
+/// post-copy verify still can't authenticate.
+fn print_manual_fallback(target: &str, pub_path: &Path) -> Result<()> {
+    let pubkey = std::fs::read_to_string(pub_path)
+        .with_context(|| format!("reading {}", pub_path.display()))?;
+    println!("{}", pubkey.trim());
+    println!(
+        "add this line to {target}:~/.ssh/authorized_keys (e.g. via console access), \
+         then re-run git-ark host add"
+    );
+    Ok(())
+}
+
+/// Generate a client SSH key (if none exists) and copy it to `target` via
+/// `ssh-copy-id`, so a box without key auth set up can get to "sshable"
+/// without leaving git-ark. This is the operator's own CONTROL key, never
+/// the forced-command key `host add` goes on to install — `setup-key` never
+/// touches an existing key, only creates one when none exists.
+///
+/// Wraps the standard tools (`ssh-keygen`, `ssh-copy-id`, `ssh`) rather than
+/// reimplementing them; all three inherit this process's stdio (the
+/// `Command` default), so a password prompt reaches the user's own terminal
+/// — git-ark itself never sees or prints the password.
+pub fn host_setup_key(target: &str, port: Option<u16>) -> Result<()> {
+    let ssh_dir = home_dir()?.join(".ssh");
+    // std::fs, not a unix-only DirBuilder mode — the client is
+    // cross-platform. `ssh`/`ssh-keygen` are the ones that actually care
+    // about `~/.ssh`'s permissions, and they run on the host's own platform
+    // defaults regardless of what we set here.
+    std::fs::create_dir_all(&ssh_dir).with_context(|| format!("creating {}", ssh_dir.display()))?;
+
+    let existing: Vec<String> = KEY_CANDIDATES
+        .iter()
+        .filter(|name| ssh_dir.join(name).exists())
+        .map(|s| s.to_string())
+        .collect();
+
+    let priv_path = match pick_or_plan_keygen(&ssh_dir, &existing) {
+        KeyPlan::Reuse(p) => {
+            println!("using existing key {}", p.display());
+            p
+        }
+        KeyPlan::Generate(p) => {
+            println!(
+                "no SSH key found in {} — generating {}",
+                ssh_dir.display(),
+                p.display()
+            );
+            let status = Command::new("ssh-keygen")
+                .args(["-t", "ed25519", "-f"])
+                .arg(&p)
+                .args(["-N", ""])
+                .status()
+                .context("spawning ssh-keygen")?;
+            if !status.success() {
+                bail!("ssh-keygen failed generating {}", p.display());
+            }
+            p
+        }
+    };
+    let pub_path = PathBuf::from(format!("{}.pub", priv_path.display()));
+
+    let mut copy_args: Vec<String> = vec!["-i".to_string(), pub_path.display().to_string()];
+    if let Some(port) = port {
+        copy_args.push("-p".to_string());
+        copy_args.push(port.to_string());
+    }
+    copy_args.push(target.to_string());
+    let copy_ok = Command::new("ssh-copy-id")
+        .args(&copy_args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !copy_ok {
+        print_manual_fallback(target, &pub_path)?;
+        bail!("ssh-copy-id to {target} did not succeed");
+    }
+
+    // Verify with only the new key and no interactive fallback — proves key
+    // auth actually works rather than trusting ssh-copy-id's exit code alone.
+    let mut verify_args: Vec<String> = vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+    ];
+    if let Some(port) = port {
+        verify_args.push("-p".to_string());
+        verify_args.push(port.to_string());
+    }
+    verify_args.push("-i".to_string());
+    verify_args.push(priv_path.display().to_string());
+    verify_args.push(target.to_string());
+    verify_args.push("true".to_string());
+    let verified = Command::new("ssh")
+        .args(&verify_args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !verified {
+        print_manual_fallback(target, &pub_path)?;
+        bail!("key auth to {target} still doesn't work after setup-key");
+    }
+
+    match port {
+        Some(p) => println!(
+            "✓ key auth to {target} works — now run: git-ark host add <name> {target} \
+             --identity {} --port {p} --bucket … --recipient … --binary …",
+            priv_path.display()
+        ),
+        None => println!(
+            "✓ key auth to {target} works — now run: git-ark host add <name> {target} \
+             --identity {} --bucket … --recipient … --binary …",
+            priv_path.display()
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1940,5 +2093,48 @@ mod tests {
         let names = vec!["nope".to_string()];
         let targets = resolve_upgrade_targets(&registry, &names, true).unwrap();
         assert_eq!(targets.len(), 2);
+    }
+
+    // -----------------------------------------------------------------
+    // host setup-key
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn pick_or_plan_keygen_reuses_existing_ed25519() {
+        let dir = PathBuf::from("/home/op/.ssh");
+        let existing = vec!["id_ed25519".to_string()];
+        assert_eq!(
+            pick_or_plan_keygen(&dir, &existing),
+            KeyPlan::Reuse(dir.join("id_ed25519"))
+        );
+    }
+
+    #[test]
+    fn pick_or_plan_keygen_reuses_rsa_when_thats_all_there_is() {
+        let dir = PathBuf::from("/home/op/.ssh");
+        let existing = vec!["id_rsa".to_string()];
+        assert_eq!(
+            pick_or_plan_keygen(&dir, &existing),
+            KeyPlan::Reuse(dir.join("id_rsa"))
+        );
+    }
+
+    #[test]
+    fn pick_or_plan_keygen_prefers_ecdsa_over_rsa() {
+        let dir = PathBuf::from("/home/op/.ssh");
+        let existing = vec!["id_rsa".to_string(), "id_ecdsa".to_string()];
+        assert_eq!(
+            pick_or_plan_keygen(&dir, &existing),
+            KeyPlan::Reuse(dir.join("id_ecdsa"))
+        );
+    }
+
+    #[test]
+    fn pick_or_plan_keygen_generates_ed25519_when_none_exist() {
+        let dir = PathBuf::from("/home/op/.ssh");
+        assert_eq!(
+            pick_or_plan_keygen(&dir, &[]),
+            KeyPlan::Generate(dir.join("id_ed25519"))
+        );
     }
 }
