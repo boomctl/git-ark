@@ -1288,13 +1288,23 @@ pub fn mirror_show() -> Result<()> {
 // routing — multi-host push fan-out
 // ---------------------------------------------------------------------
 
-/// The `git-ark-<name>:<repo>` push URL for each host in `host_names`, in
-/// order — one per host, keyed off the `~/.ssh/config` alias `host_add`
-/// installs (`Host git-ark-<name>`), so `ssh` resolves the rest.
-fn push_urls(host_names: &[String], repo: &str) -> Vec<String> {
+/// The `<alias>:<repo>` push URL for each host in `host_names`, in order. The
+/// alias is the one the registry records for that host (`Host::push_alias()`) —
+/// `git-ark-<name>` for a conventional host, its real alias for a hand-wired or
+/// adopted one. A name not in the registry falls back to the convention (route
+/// rejects unknown names before this, so that path is only exercised in tests).
+fn push_urls(registry: &Registry, host_names: &[String], repo: &str) -> Vec<String> {
     host_names
         .iter()
-        .map(|name| format!("git-ark-{name}:{repo}"))
+        .map(|name| {
+            let alias = registry
+                .list()
+                .iter()
+                .find(|h| &h.name == name)
+                .map(|h| h.push_alias())
+                .unwrap_or_else(|| format!("git-ark-{name}"));
+            format!("{alias}:{repo}")
+        })
         .collect()
 }
 
@@ -1352,7 +1362,7 @@ pub fn route(repo_path: &Path, host_names: &[String]) -> Result<()> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow::anyhow!("{} has no usable directory name", repo_path.display()))?
         .to_string();
-    let urls = push_urls(host_names, &repo);
+    let urls = push_urls(&registry, host_names, &repo);
 
     // Remove any prior git-ark remote first — ignore failure (there may be
     // none yet) — so re-routing never leaves a stale push URL alongside the
@@ -2068,13 +2078,23 @@ mod tests {
     }
 
     #[test]
-    fn push_urls_formats_one_git_ark_alias_url_per_host() {
-        let names = vec!["nas".to_string(), "ec2".to_string()];
+    fn push_urls_uses_the_registrys_recorded_alias() {
+        let mut registry = Registry::default();
+        // Conventional host: no recorded alias → git-ark-<name>.
+        registry.upsert(test_host("ec2", false));
+        // Hand-wired/adopted host: records a non-standard alias.
+        let mut nas = test_host("nas", false);
+        nas.push_alias = Some("git-ark".to_string());
+        registry.upsert(nas);
+
+        // Includes an unregistered name to exercise the convention fallback.
+        let names = vec!["nas".to_string(), "ec2".to_string(), "ghost".to_string()];
         assert_eq!(
-            push_urls(&names, "myrepo"),
+            push_urls(&registry, &names, "myrepo"),
             vec![
-                "git-ark-nas:myrepo".to_string(),
-                "git-ark-ec2:myrepo".to_string(),
+                "git-ark:myrepo".to_string(),       // recorded alias wins
+                "git-ark-ec2:myrepo".to_string(),   // conventional
+                "git-ark-ghost:myrepo".to_string(), // unregistered → fallback
             ]
         );
     }
