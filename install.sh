@@ -9,36 +9,15 @@
 #
 # Env:
 #   GIT_ARK_BINDIR   install directory (default: $HOME/.local/bin)
-#   GIT_ARK_VERSION  release tag to install (default: latest)
+#   GIT_ARK_VERSION  release to install: "latest" (default), "v0.2.0", or "0.2.0"
+#
+# The whole script is wrapped in main() and only invoked on the last line, so a
+# truncated download (the classic `curl | sh` hazard) never runs a half-script.
 set -eu
-
-REPO="boomctl/git-ark"
-BINDIR="${GIT_ARK_BINDIR:-$HOME/.local/bin}"
-VERSION="${GIT_ARK_VERSION:-latest}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'git-ark install: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
-
-os=$(uname -s)
-arch=$(uname -m)
-case "$os" in
-  Linux)  plat="unknown-linux-musl" ;;
-  Darwin) plat="apple-darwin" ;;
-  *) die "unsupported OS '$os' — on Windows use install.ps1" ;;
-esac
-case "$arch" in
-  x86_64|amd64)   cpu="x86_64" ;;
-  aarch64|arm64)  cpu="aarch64" ;;
-  *) die "unsupported architecture '$arch'" ;;
-esac
-asset="git-ark-${cpu}-${plat}"
-
-if [ "$VERSION" = "latest" ]; then
-  base="https://github.com/$REPO/releases/latest/download"
-else
-  base="https://github.com/$REPO/releases/download/$VERSION"
-fi
 
 dl() { # url dest
   if have curl; then curl -fsSL --proto '=https' "$1" -o "$2"
@@ -46,27 +25,60 @@ dl() { # url dest
   else die "need curl or wget"; fi
 }
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT INT TERM
+main() {
+  REPO="boomctl/git-ark"
+  BINDIR="${GIT_ARK_BINDIR:-$HOME/.local/bin}"
+  VERSION="${GIT_ARK_VERSION:-latest}"
+  # Accept "0.2.0" as well as "v0.2.0" — release tags are v-prefixed.
+  case "$VERSION" in
+    latest | v*) ;;
+    *) VERSION="v$VERSION" ;;
+  esac
 
-say "downloading $asset ($VERSION)…"
-dl "$base/$asset" "$tmp/git-ark" || die "download failed — is there a release for $asset?"
-dl "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "could not fetch SHA256SUMS"
+  os=$(uname -s)
+  arch=$(uname -m)
+  case "$os" in
+    Linux) plat="unknown-linux-musl" ;;
+    Darwin) plat="apple-darwin" ;;
+    *) die "unsupported OS '$os' — on Windows use install.ps1" ;;
+  esac
+  case "$arch" in
+    x86_64 | amd64) cpu="x86_64" ;;
+    aarch64 | arm64) cpu="aarch64" ;;
+    *) die "unsupported architecture '$arch'" ;;
+  esac
+  asset="git-ark-${cpu}-${plat}"
 
-want=$(grep " ${asset}\$" "$tmp/SHA256SUMS" | awk '{print $1}')
-[ -n "$want" ] || die "no checksum for $asset in SHA256SUMS"
-if have sha256sum; then got=$(sha256sum "$tmp/git-ark" | awk '{print $1}')
-elif have shasum;  then got=$(shasum -a 256 "$tmp/git-ark" | awk '{print $1}')
-else die "need sha256sum or shasum to verify the download"; fi
-[ "$want" = "$got" ] || die "checksum mismatch (expected $want, got $got)"
+  if [ "$VERSION" = "latest" ]; then
+    base="https://github.com/$REPO/releases/latest/download"
+  else
+    base="https://github.com/$REPO/releases/download/$VERSION"
+  fi
 
-mkdir -p "$BINDIR"
-chmod 755 "$tmp/git-ark"
-mv "$tmp/git-ark" "$BINDIR/git-ark"
-say "installed git-ark → $BINDIR/git-ark"
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT INT TERM
 
-case ":${PATH}:" in
-  *":$BINDIR:"*) ;;
-  *) say "note: $BINDIR is not on your PATH — add it, e.g.  export PATH=\"$BINDIR:\$PATH\"" ;;
-esac
-"$BINDIR/git-ark" --version 2>/dev/null || true
+  say "downloading $asset ($VERSION)…"
+  dl "$base/$asset" "$tmp/git-ark" || die "download failed — is there a release for $asset?"
+  dl "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "could not fetch SHA256SUMS"
+
+  want=$(grep " ${asset}\$" "$tmp/SHA256SUMS" | awk '{print $1}')
+  [ -n "$want" ] || die "no checksum for $asset in SHA256SUMS"
+  if have sha256sum; then got=$(sha256sum "$tmp/git-ark" | awk '{print $1}')
+  elif have shasum; then got=$(shasum -a 256 "$tmp/git-ark" | awk '{print $1}')
+  else die "need sha256sum or shasum to verify the download"; fi
+  [ "$want" = "$got" ] || die "checksum mismatch (expected $want, got $got)"
+
+  mkdir -p "$BINDIR"
+  chmod 755 "$tmp/git-ark"
+  mv "$tmp/git-ark" "$BINDIR/git-ark"
+  say "installed git-ark → $BINDIR/git-ark"
+
+  case ":${PATH}:" in
+    *":$BINDIR:"*) ;;
+    *) say "note: $BINDIR is not on your PATH — add it, e.g.  export PATH=\"$BINDIR:\$PATH\"" ;;
+  esac
+  "$BINDIR/git-ark" --version 2>/dev/null || true
+}
+
+main "$@"
