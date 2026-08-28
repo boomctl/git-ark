@@ -4,6 +4,18 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-27
+
+### Added
+- `git-ark vault provision --bucket <name>` — provision the AWS S3 vault from
+  the client, closing the last manual step. It discovers your configured AWS
+  profiles and lets you pick one, shows the account it resolves to and asks you
+  to confirm, then creates the bucket (Object Lock, versioning, default SSE,
+  all public access blocked, a `history/`-expiry lifecycle) and a write-only
+  (`s3:PutObject`-only) IAM user, and mints an access key to hand to `host add`.
+  **AWS S3 only** — the write-only model relies on AWS IAM; for MinIO / R2,
+  bring your own bucket.
+
 ## [0.3.2] — 2026-08-27
 
 ### Changed

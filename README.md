@@ -60,8 +60,10 @@ Everything below runs on **your machine** (the client). You never hand-edit
 files on the host.
 
 ```sh
-# 1. One-time: provision the S3 vault (bucket + write-only credential).
-#    See docs/provisioning.md — it prints the write-only access key.
+# 1. One-time: provision the S3 vault from your machine — picks your AWS
+#    profile, creates the bucket + write-only key, prints it as export lines.
+#    (AWS S3 only; for MinIO/R2 bring your own bucket. See docs/provisioning.md.)
+git-ark vault provision --bucket git-ark-vault-example
 
 # 2. If you can't already key-auth into the box, set that up (optional):
 git-ark host setup-key user@nas.lan            # generates + copies a key
@@ -125,6 +127,7 @@ privilege parts ever reach a host.
 
 | Command | What it does |
 |---|---|
+| `git-ark vault provision` | create the S3 vault + write-only IAM key from your machine (AWS S3 only) |
 | `git-ark host discover` | scan your LAN for sshable hosts to add |
 | `git-ark host setup-key <target>` | generate + copy a client SSH key to a box you can't key-auth into yet |
 | `git-ark host add <name> <target> …` | probe → ship binary → install forced-command key → write config/secret → verify → register |

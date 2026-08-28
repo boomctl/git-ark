@@ -5,6 +5,35 @@ backs up to. Run this **once**, from a trusted admin machine — it needs an AWS
 profile with permission to create buckets, bucket policies, and IAM users,
 which the host itself never has.
 
+> **AWS S3 only.** The write-only guarantee relies on AWS IAM. For MinIO,
+> Cloudflare R2, or other S3-compatible stores, create a bucket yourself and
+> pass `--bucket`/`--endpoint` to `git-ark host add` — there's nothing to
+> provision here.
+
+## The easy way: `git-ark vault provision`
+
+The client does the whole thing — it discovers your configured AWS profiles,
+lets you pick one, shows which account it resolves to, and (on your confirm)
+creates the bucket + write-only IAM user and mints the key:
+
+```bash
+git-ark vault provision --bucket git-ark-vault-<your-account-id>
+# optional: --region us-east-1 --prefix git-ark --history-days 90 \
+#           --iam-user git-ark-nas --profile <name> --yes
+```
+
+It prints the write-only key as `export GIT_ARK_HOST_S3_KEY_ID=… / _SECRET=…`
+lines — run those, clear your scrollback, then wire a host:
+
+```bash
+git-ark host add nas user@nas.lan --bucket git-ark-vault-<your-account-id> \
+    --region us-east-1 --recipient age1…
+```
+
+The rest of this document is the same setup **by hand** — useful for
+review, auditing exactly what gets created, or provisioning without the
+`git-ark` binary.
+
 ## Prerequisites
 
 - The [`aws` CLI](https://aws.amazon.com/cli/), configured with a profile that

@@ -8,6 +8,7 @@ use git_ark::clock::SystemClock;
 use git_ark::config::{Config, Secrets};
 use git_ark::github::{self, branches_to_mirror};
 use git_ark::hostcmd::{self, HostAddArgs};
+use git_ark::provision;
 use git_ark::repo_policy::{read_repo_policy, Visibility};
 use git_ark::restore::{list_versions, run_restore};
 use git_ark::s3::S3ObjectStore;
@@ -65,6 +66,11 @@ enum Cmd {
     Mirror {
         #[command(subcommand)]
         action: MirrorAction,
+    },
+    /// Provision the S3 vault (bucket + write-only IAM key). AWS S3 only.
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
     },
     /// Fan a repo's `git push git-ark` out across hosts: (re)materializes a
     /// multi-push-URL `git-ark` remote in the repo, so one push reaches all
@@ -182,6 +188,36 @@ enum MirrorAction {
         /// Path to the repo to check (default: the current directory).
         #[arg(default_value = ".")]
         repo: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum VaultAction {
+    /// Create the S3 bucket (Object Lock, versioned, SSE, public access
+    /// blocked, history lifecycle) and a write-only (PutObject-only) IAM user,
+    /// then mint an access key to feed into `host add`. Discovers your AWS
+    /// profiles and lets you pick one. AWS S3 only — not MinIO/R2.
+    Provision {
+        /// S3 bucket name to create/use (globally unique; e.g.
+        /// `git-ark-vault-<account-id>`).
+        #[arg(long)]
+        bucket: String,
+        #[arg(long, default_value = "us-east-1")]
+        region: String,
+        #[arg(long, default_value = "git-ark")]
+        prefix: String,
+        /// Days before `history/` snapshots (and noncurrent versions) expire.
+        #[arg(long, default_value_t = 90)]
+        history_days: u32,
+        /// Name of the write-only IAM user to create.
+        #[arg(long, default_value = "git-ark-nas")]
+        iam_user: String,
+        /// AWS profile to use; omit to pick from your configured profiles.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -437,6 +473,25 @@ fn real_main() -> Result<()> {
             MirrorAction::Set { name } => hostcmd::mirror_set(&name),
             MirrorAction::Show => hostcmd::mirror_show(),
             MirrorAction::Check { repo } => hostcmd::mirror_check(&repo),
+        },
+        Cmd::Vault { action } => match action {
+            VaultAction::Provision {
+                bucket,
+                region,
+                prefix,
+                history_days,
+                iam_user,
+                profile,
+                yes,
+            } => provision::run(&provision::ProvisionArgs {
+                bucket,
+                region,
+                prefix,
+                history_days,
+                iam_user,
+                profile,
+                yes,
+            }),
         },
         Cmd::Route { repo, to } => {
             if to.is_empty() {
