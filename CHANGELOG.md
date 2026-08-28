@@ -4,6 +4,19 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-08-28
+
+### Added
+- `git-ark host adopt <name> <target>` — register an already-deployed host in
+  the client registry **without touching it**. It reconstructs the entry from
+  the host's deployed surface over the control channel (config path from the
+  forced-command line, triple from `uname`, vault fields from the host's
+  `config.toml`), verifies with `selfcheck`, and writes only the registry row —
+  no ssh alias, nothing on the host, so existing remotes and aliases are
+  untouched. This is the recovery path for a lost client registry, and the way
+  to bring in hosts wired before the registry existed. `status` and `upgrade`
+  work against an adopted host immediately.
+
 ## [0.4.0] — 2026-08-27
 
 ### Added
