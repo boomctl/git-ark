@@ -11,6 +11,7 @@
 
 use crate::config::S3Config;
 use crate::github;
+use crate::release;
 use crate::hostspec::{
     assess, forced_command_line, parse_probe, per_host_prefix, render_config, render_secrets,
     ssh_config_block, PROBE_SCRIPT,
@@ -19,6 +20,7 @@ use crate::registry::{Host, Registry};
 use crate::repo_policy::read_repo_policy;
 use crate::sshdiag::{classify_ssh_error, diagnosis_message, SshDiagnosis};
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -343,7 +345,9 @@ pub struct HostAddArgs {
     pub prefix: String,
     pub endpoint: Option<String>,
     pub recipient: String,
-    pub binary: PathBuf,
+    /// Binary to ship to the host. `None` auto-fetches the matching release
+    /// asset for this client's version (see `release::fetch_host_binary`).
+    pub binary: Option<PathBuf>,
     /// Designate this host the GitHub mirror once it's wired and registered.
     /// Requires `GIT_ARK_GITHUB_TOKEN`; demotes whichever other host
     /// currently holds the mirror (see `designate_mirror`).
@@ -431,19 +435,33 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         }
     };
 
-    // 2. Resolve the binary. Must exist; a filename that doesn't look like
-    // the target triple is a warning, not a hard stop (it may be a renamed
-    // or symlinked binary that's still correct).
-    let binary_bytes = std::fs::read(&args.binary)
-        .with_context(|| format!("reading --binary {}", args.binary.display()))?;
-    let binary_name = args.binary.to_string_lossy();
-    if !binary_name.contains(&plan.triple) {
-        eprintln!(
-            "⚠ --binary {} doesn't look like it's built for {} (the probed host's triple) — continuing anyway",
-            args.binary.display(),
-            plan.triple
-        );
-    }
+    // 2. Resolve the binary. With `--binary`, read that path (a filename that
+    // doesn't look like the target triple is a warning, not a hard stop — it
+    // may be a renamed/symlinked binary that's still correct). Without it,
+    // auto-fetch the matching release asset for the probed triple, verified
+    // against the release SHA256SUMS.
+    let binary_bytes = match &args.binary {
+        Some(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading --binary {}", path.display()))?;
+            if !path.to_string_lossy().contains(&plan.triple) {
+                eprintln!(
+                    "⚠ --binary {} doesn't look like it's built for {} (the probed host's triple) — continuing anyway",
+                    path.display(),
+                    plan.triple
+                );
+            }
+            bytes
+        }
+        None => {
+            println!(
+                "• fetching git-ark v{} for {} from the release…",
+                release::version(),
+                plan.triple
+            );
+            release::fetch_host_binary(&plan.triple)?
+        }
+    };
 
     // 3. Forced-command keypair — generated client-side; only the public
     // half ever reaches the host. Skip if a key for this name already exists
@@ -887,25 +905,58 @@ fn upgrade_one(host: &Host, bytes: &[u8]) -> Result<()> {
 /// finish attempting every host before this returns a non-zero error, so a
 /// script driving it can detect a partial upgrade without losing the hosts
 /// that did succeed.
-pub fn upgrade(names: &[String], all: bool, binary: &Path) -> Result<()> {
+pub fn upgrade(names: &[String], all: bool, binary: Option<&Path>) -> Result<()> {
     let registry = Registry::load(&registry_path()?)?;
     let targets = resolve_upgrade_targets(&registry, names, all)?;
 
-    let bytes =
-        std::fs::read(binary).with_context(|| format!("reading --binary {}", binary.display()))?;
-    let binary_name = binary.to_string_lossy();
+    // With --binary, read it once — it applies to every target. Without it,
+    // auto-fetch the matching release asset per host triple, caching by triple
+    // so hosts of the same arch share a single download.
+    let explicit = match binary {
+        Some(path) => Some(
+            std::fs::read(path).with_context(|| format!("reading --binary {}", path.display()))?,
+        ),
+        None => None,
+    };
+    let mut fetched: HashMap<String, Vec<u8>> = HashMap::new();
 
     let mut any_failed = false;
     for host in &targets {
-        if !binary_name.contains(&host.triple) {
-            eprintln!(
-                "⚠ --binary {} doesn't look like it's built for {}'s triple ({}) — continuing anyway",
-                binary.display(),
-                host.name,
-                host.triple
-            );
-        }
-        if let Err(e) = upgrade_one(host, &bytes) {
+        let bytes: &[u8] = if let Some(explicit) = &explicit {
+            if let Some(path) = binary {
+                if !path.to_string_lossy().contains(&host.triple) {
+                    eprintln!(
+                        "⚠ --binary {} doesn't look like it's built for {}'s triple ({}) — continuing anyway",
+                        path.display(),
+                        host.name,
+                        host.triple
+                    );
+                }
+            }
+            explicit
+        } else {
+            if !fetched.contains_key(&host.triple) {
+                println!(
+                    "• fetching git-ark v{} for {} ({})…",
+                    release::version(),
+                    host.name,
+                    host.triple
+                );
+                match release::fetch_host_binary(&host.triple) {
+                    Ok(b) => {
+                        fetched.insert(host.triple.clone(), b);
+                    }
+                    Err(e) => {
+                        println!("✗ {}: {e}", host.name);
+                        any_failed = true;
+                        continue;
+                    }
+                }
+            }
+            &fetched[&host.triple]
+        };
+
+        if let Err(e) = upgrade_one(host, bytes) {
             println!("✗ {}: {e}", host.name);
             any_failed = true;
         }

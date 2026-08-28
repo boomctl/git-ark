@@ -9,6 +9,7 @@ pub mod hooks;
 pub mod hostcmd;
 pub mod hostspec;
 pub mod registry;
+pub mod release;
 pub mod repo_policy;
 pub mod restore;
 pub mod s3;

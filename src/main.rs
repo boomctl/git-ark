@@ -86,9 +86,11 @@ enum Cmd {
         /// Upgrade every registered host instead of a single named one.
         #[arg(long)]
         all: bool,
-        /// Path to the git-ark binary built for the target host's triple.
+        /// Path to a git-ark binary built for the target host's triple.
+        /// Omit to auto-fetch the matching binary for this client's version
+        /// from the release.
         #[arg(long)]
-        binary: PathBuf,
+        binary: Option<PathBuf>,
     },
 }
 
@@ -121,9 +123,11 @@ enum HostAction {
         /// age public key the host will encrypt backups to.
         #[arg(long)]
         recipient: String,
-        /// Path to the git-ark binary built for the host's release triple.
+        /// Path to a git-ark binary built for the host's release triple.
+        /// Omit to auto-fetch the matching binary for this client's version
+        /// from the release (verified against the release SHA256SUMS).
         #[arg(long)]
-        binary: PathBuf,
+        binary: Option<PathBuf>,
         /// Designate this host the GitHub mirror once it's wired and
         /// registered. Requires `GIT_ARK_GITHUB_TOKEN`; demotes whichever
         /// other host currently holds the mirror.
@@ -442,7 +446,7 @@ fn real_main() -> Result<()> {
         }
         Cmd::Upgrade { host, all, binary } => {
             let hosts: Vec<String> = host.into_iter().collect();
-            hostcmd::upgrade(&hosts, all, &binary)
+            hostcmd::upgrade(&hosts, all, binary.as_deref())
         }
         Cmd::Restore {
             repo,

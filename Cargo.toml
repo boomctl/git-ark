@@ -37,6 +37,7 @@ age = "0.10"
 rusty-s3 = "0.5"
 ureq = "2"
 md5 = "0.7"
+sha2 = "0.10"
 shell-words = "1"
 time = { version = "0.3", features = ["formatting", "macros"] }
 

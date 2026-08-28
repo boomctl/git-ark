@@ -56,22 +56,19 @@ Everything below runs on **your machine** (the client). You never hand-edit
 files on the host.
 
 ```sh
-# 0. Get a git-ark binary for your host's arch (or download a release):
-cargo zigbuild --release --target aarch64-unknown-linux-musl   # e.g. an ARM NAS
-
 # 1. One-time: provision the S3 vault (bucket + write-only credential).
 #    See docs/provisioning.md — it prints the write-only access key.
 
 # 2. If you can't already key-auth into the box, set that up (optional):
 git-ark host setup-key user@nas.lan            # generates + copies a key
 
-# 3. Add the host — probes it, ships the binary, wires the forced-command key,
-#    writes config + the write-only secret, verifies, and registers it:
+# 3. Add the host — probes it, fetches the matching git-ark binary for its arch,
+#    ships it, wires the forced-command key, writes config + the write-only
+#    secret, verifies, and registers it:
 export GIT_ARK_HOST_S3_KEY_ID=…  GIT_ARK_HOST_S3_SECRET=…       # the write-only key
 git-ark host add nas user@nas.lan \
     --bucket git-ark-vault-example --region us-east-1 \
     --recipient age1…                                          # your age *public* key
-    --binary target/aarch64-unknown-linux-musl/release/git-ark
 
 # 4. In a repo, route it and push:
 git-ark route . --to nas
@@ -80,6 +77,11 @@ git push git-ark                                               # → encrypted b
 # 5. Check on your fleet anytime:
 git-ark status
 ```
+
+No toolchain, no cross-compile: `host add` (and `upgrade`) fetch the right host
+binary for your client's version straight from the release and verify it against
+the release `SHA256SUMS`. Pass `--binary <path>` only for an air-gapped host or a
+custom build.
 
 Don't have an age keypair yet? `age-keygen -o ~/.config/git-ark/identity.txt`
 prints the `age1…` **public** recipient — keep the private identity off the host;
@@ -127,7 +129,7 @@ privilege parts ever reach a host.
 | `git-ark mirror set <name>` / `mirror show` | designate / show the single GitHub-mirror host (token follows it, revoked from the old) |
 | `git-ark mirror check` | preflight the GitHub token against a repo's `.git-ark.yml` (auth, repo access, `workflow` scope) |
 | `git-ark status` | fleet health: reachable? version? disk? which host mirrors? |
-| `git-ark upgrade <host>│--all --binary <path>` | push a newer binary from the client and re-verify |
+| `git-ark upgrade <host>│--all` | fetch the current release binary (or `--binary <path>`) and re-verify |
 | `git-ark restore <repo> --identity <key>` | restore from S3 on a trusted machine |
 
 ## How it works
