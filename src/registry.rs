@@ -35,6 +35,22 @@ pub struct Host {
     /// Whether this host is the client-enforced singleton GitHub mirror.
     #[serde(default)]
     pub mirror: bool,
+    /// The `~/.ssh/config` alias `git push` rides to reach this host. Recorded
+    /// only when it departs from the `git-ark-<name>` convention (a hand-wired
+    /// or adopted host); `None` means "conventional — resolve to `git-ark-<name>`".
+    #[serde(default)]
+    pub push_alias: Option<String>,
+}
+
+impl Host {
+    /// The ssh alias `git push` rides to reach this host: the recorded
+    /// `push_alias` when set, else the conventional `git-ark-<name>`. This is
+    /// the single place the alias is decided — nothing else formats it.
+    pub fn push_alias(&self) -> String {
+        self.push_alias
+            .clone()
+            .unwrap_or_else(|| format!("git-ark-{}", self.name))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -115,7 +131,32 @@ mod tests {
             prefix: "git-ark".to_string(),
             endpoint: None,
             mirror: false,
+            push_alias: None,
         }
+    }
+
+    #[test]
+    fn push_alias_defaults_to_convention_and_honors_override() {
+        let mut h = host("nas");
+        assert_eq!(h.push_alias(), "git-ark-nas"); // None → conventional
+        h.push_alias = Some("git-ark".to_string());
+        assert_eq!(h.push_alias(), "git-ark"); // recorded value wins
+    }
+
+    #[test]
+    fn hosts_toml_without_push_alias_loads_as_none() {
+        // A registry written before push_alias existed must still load.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hosts.toml");
+        std::fs::write(
+            &path,
+            "[[hosts]]\nname = \"old\"\nssh_target = \"ark@old\"\nport = 22\n\
+             triple = \"x86_64-unknown-linux-musl\"\ninstall_dir = \"/home/ark/git-ark\"\n",
+        )
+        .unwrap();
+        let loaded = Registry::load(&path).unwrap();
+        assert_eq!(loaded.list()[0].push_alias, None);
+        assert_eq!(loaded.list()[0].push_alias(), "git-ark-old");
     }
 
     #[test]

@@ -596,6 +596,9 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
         prefix: args.prefix.clone(),
         endpoint: args.endpoint.clone(),
         mirror: false,
+        // Conventional host — the alias is `git-ark-<name>`, which host_add just
+        // wrote. `None` resolves to exactly that; recording it would be noise.
+        push_alias: None,
     });
     registry.save(&registry_path)?;
 
@@ -742,6 +745,7 @@ pub fn host_adopt(args: &HostAdoptArgs) -> Result<()> {
         prefix,
         endpoint,
         mirror,
+        push_alias: None, // A4 replaces this with the alias discovered from ~/.ssh/config
     });
     registry.save(&registry_path)?;
 
@@ -1961,6 +1965,7 @@ mod tests {
             prefix: "git-ark".to_string(),
             endpoint: None,
             mirror,
+            push_alias: None,
         }
     }
 
