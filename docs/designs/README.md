@@ -22,3 +22,8 @@ first.
 - [**host-adopt.md**](host-adopt.md) — `git-ark host adopt`: teach the client
   about an already-deployed host without touching it — the control plane's
   recovery story (and how to bring pre-registry hosts in from the cold).
+- [**host-resolution.md**](host-resolution.md) — make the push alias *data* the
+  registry records instead of a `git-ark-<name>` formula both git-ark and its
+  clients recompute; adds `host list --json` as the client contract and teaches
+  `adopt` to discover a host's real alias. Closes the data-channel follow-up
+  parked in host-adopt.md.

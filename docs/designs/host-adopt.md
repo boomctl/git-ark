@@ -2,8 +2,13 @@
 
 > **Status: shipped.** `git-ark host adopt <name> <target>` is implemented, and
 > verified to touch nothing on the host or in `~/.ssh/config` (a byte-identical
-> config before and after). The data-channel wrinkle below remains a follow-up;
-> `status`/`upgrade` (control channel) work today.
+> config before and after). `status`/`upgrade` (control channel) work today.
+>
+> **The data-channel wrinkle below is resolved in
+> [`host-resolution.md`](host-resolution.md)** — the push alias becomes a
+> recorded registry field, and adopt discovers a host's real alias by reading
+> `~/.ssh/config` (still touching nothing). Read that design for the alias story;
+> this doc is the recovery/visibility rationale it builds on.
 
 ## Motivation
 
