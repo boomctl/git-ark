@@ -141,7 +141,13 @@ enum HostAction {
         mirror: bool,
     },
     /// List the hosts registered with this client.
-    List,
+    List {
+        /// Emit a machine-readable JSON array (name, resolved push alias,
+        /// backend) instead of the columnar human view. The client contract
+        /// tools like arkwatch resolve a host through.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a host from the registry and drop its `~/.ssh/config` alias.
     Remove {
         /// Name of the host to remove (as given to `host add`).
@@ -477,7 +483,13 @@ fn real_main() -> Result<()> {
                 binary,
                 mirror,
             }),
-            HostAction::List => hostcmd::host_list(),
+            HostAction::List { json } => {
+                if json {
+                    hostcmd::host_list_json()
+                } else {
+                    hostcmd::host_list()
+                }
+            }
             HostAction::Remove { name } => hostcmd::host_remove(&name),
             HostAction::Discover {
                 port,

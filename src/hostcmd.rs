@@ -812,6 +812,55 @@ pub fn host_list() -> Result<()> {
     Ok(())
 }
 
+/// One host as clients see it over `host list --json`. `alias` is the RESOLVED
+/// push alias (`Host::push_alias()`), never the raw `Option`, so a consumer
+/// never re-derives it. The shape evolves additively: fields may be added; a
+/// consumer tolerates unknown ones.
+#[derive(Debug, serde::Serialize)]
+struct HostRow<'a> {
+    name: &'a str,
+    alias: String,
+    ssh_target: &'a str,
+    port: u16,
+    triple: &'a str,
+    bucket: &'a str,
+    region: &'a str,
+    prefix: &'a str,
+    endpoint: Option<&'a str>,
+    mirror: bool,
+}
+
+/// The machine-readable fleet: one row per host, sorted by name. Pure over the
+/// registry so it's unit-testable without touching disk.
+fn host_rows(registry: &Registry) -> Vec<HostRow<'_>> {
+    let mut hosts: Vec<&Host> = registry.list().iter().collect();
+    hosts.sort_by(|a, b| a.name.cmp(&b.name));
+    hosts
+        .into_iter()
+        .map(|h| HostRow {
+            name: &h.name,
+            alias: h.push_alias(),
+            ssh_target: &h.ssh_target,
+            port: h.port,
+            triple: &h.triple,
+            bucket: &h.bucket,
+            region: &h.region,
+            prefix: &h.prefix,
+            endpoint: h.endpoint.as_deref(),
+            mirror: h.mirror,
+        })
+        .collect()
+}
+
+/// `host list --json`: the client contract for resolving a host name to its
+/// push alias and backend. Emits a flat JSON array of [`HostRow`].
+pub fn host_list_json() -> Result<()> {
+    let registry = Registry::load(&registry_path()?)?;
+    let rows = host_rows(&registry);
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
+}
+
 /// Remove `name` from the registry and drop its `~/.ssh/config` alias block.
 /// A name not in the registry is reported, not an error — there's nothing to
 /// retry.
@@ -2097,6 +2146,27 @@ mod tests {
                 "git-ark-ghost:myrepo".to_string(), // unregistered → fallback
             ]
         );
+    }
+
+    #[test]
+    fn host_rows_resolve_alias_and_sort_by_name() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("zeta", false));
+        let mut nas = test_host("nas", true);
+        nas.push_alias = Some("git-ark".to_string());
+        registry.upsert(nas);
+
+        let rows = host_rows(&registry);
+        assert_eq!(rows[0].name, "nas"); // sorted
+        assert_eq!(rows[0].alias, "git-ark"); // resolved recorded alias
+        assert!(rows[0].mirror);
+        assert_eq!(rows[1].name, "zeta");
+        assert_eq!(rows[1].alias, "git-ark-zeta"); // conventional
+
+        // Serializes as an array of objects carrying the resolved alias.
+        let json = serde_json::to_string(&rows).unwrap();
+        assert!(json.contains("\"alias\":\"git-ark\""));
+        assert!(json.contains("\"name\":\"nas\""));
     }
 
     // -----------------------------------------------------------------
