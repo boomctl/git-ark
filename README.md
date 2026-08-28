@@ -172,7 +172,8 @@ remote: ✓ disk            56.0 TB free (98%)
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture and threat model,
 and [docs/deploy.md](docs/deploy.md) for the by-hand setup path that `host add`
-automates.
+automates. For what's *proposed* — and how we reason about features before
+building them — see [docs/designs/](docs/designs/).
 
 ## Security model (short version)
 
