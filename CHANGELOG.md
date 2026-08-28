@@ -4,6 +4,13 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-08-27
+
+### Changed
+- `host add` generates the forced-command key with `ssh-keygen -q`, so wiring a
+  host no longer dumps the "Generating public/private…" banner, key fingerprint,
+  and randomart — just the result.
+
 ## [0.3.1] — 2026-08-27
 
 ### Fixed
