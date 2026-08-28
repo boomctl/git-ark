@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "A write-only backup vault that fronts your own git host"
+repository = "https://github.com/boomctl/git-ark"
+homepage = "https://github.com/boomctl/git-ark"
+readme = "README.md"
+keywords = ["backup", "git", "encryption", "s3", "ssh"]
+categories = ["command-line-utilities"]
+
+# cargo-binstall: fetch the prebuilt release binary instead of compiling.
+# `cargo binstall git-ark`
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/git-ark-{ target }{ binary-ext }"
+bin-dir = "git-ark-{ target }{ binary-ext }"
+pkg-fmt = "bin"
 
 [lib]
 name = "git_ark"

@@ -15,6 +15,29 @@ wire it with one command, and push. A dead disk, a stolen box, or a fat-fingered
 `rm -rf` can't take everything — and nothing touches the public internet unless
 you opt a repo in by name.
 
+## Install
+
+Installs the **client** — the command you run on your own machine. Hosts get
+their binary automatically from `git-ark host add`, so they never need this.
+
+```sh
+# macOS / Linux — download the latest release binary, checksum-verified:
+curl -fsSL https://raw.githubusercontent.com/boomctl/git-ark/main/install.sh | sh
+```
+```powershell
+# Windows (PowerShell):
+irm https://raw.githubusercontent.com/boomctl/git-ark/main/install.ps1 | iex
+```
+```sh
+# With Rust (once published to crates.io):
+cargo install git-ark        # build from source
+cargo binstall git-ark       # prebuilt release binary, no compile
+```
+
+Or grab a binary directly from the
+[releases](https://github.com/boomctl/git-ark/releases). Homebrew and Scoop taps
+are on the way.
+
 ## Quick start
 
 Everything below runs on **your machine** (the client). You never hand-edit
