@@ -4,6 +4,32 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-08-28
+
+### Added
+- `git-ark host list --json` — a machine-readable array of the fleet (each
+  host's name, **resolved** push alias, and backend: bucket, region, prefix,
+  endpoint, mirror). This is the stable contract a client (e.g. arkwatch)
+  resolves a host name to its alias and vault through, instead of guessing the
+  alias from a naming convention.
+- `git-ark host adopt … --push-alias <alias>` — record a push alias explicitly,
+  for when `~/.ssh/config` has several stanzas for the target, or none.
+
+### Changed
+- The push alias is now **data the registry records** (`push_alias`), not a
+  `git-ark-<name>` formula recomputed at every call site. A host added by
+  `host add` stays conventional (the field is unset and resolves to
+  `git-ark-<name>`); a hand-wired or adopted host records its real alias. Every
+  existing `hosts.toml` loads unchanged.
+- `git-ark route` now pushes at the alias the registry records for each host, so
+  routing to a hand-wired host (whose alias isn't `git-ark-<name>`) works with no
+  hand-editing.
+- `git-ark host adopt` discovers a host's real push alias by reading the client's
+  own `~/.ssh/config` (a stanza already reaching the target) and records it —
+  still read-only on the host and writing no ssh alias. This closes the
+  data-channel follow-up from 0.5.0's adopt: an adopted host can now be routed
+  and pushed to, not just `status`/`upgrade`d.
+
 ## [0.5.0] — 2026-08-28
 
 ### Added
