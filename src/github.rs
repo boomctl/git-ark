@@ -285,8 +285,35 @@ fn scrub_token(text: &str, token: &str) -> String {
     text.replace(token, "***")
 }
 
-/// Push the branches to the mirror. On failure, git's stderr is scrubbed of the
-/// token (defense-in-depth) before being surfaced.
+/// Does a scrubbed `git push` stderr look like a *transient* server/network
+/// failure worth retrying? This is an allowlist of clear transient signals —
+/// 5xx server errors and connection failures. It deliberately does NOT match
+/// auth failures, 404s, or non-fast-forward rejections, which retrying can't
+/// fix. Note a GitHub 500 arrives as `[remote rejected] … (Internal Server
+/// Error)`, so we can't key off "rejected" — we key off the 5xx text itself.
+fn is_transient_push_error(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    const TRANSIENT: &[&str] = &[
+        "internal server error",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "rpc failed; http 5", // e.g. "error: RPC failed; HTTP 502"
+        "the requested url returned error: 5", // curl-style 5xx
+        "gnutls recv error",
+        "could not resolve host",
+        "failed to connect",
+        "connection timed out",
+        "connection reset",
+        "operation timed out",
+    ];
+    TRANSIENT.iter().any(|m| s.contains(m))
+}
+
+/// Push the branches to the mirror, retrying a couple of times on transient
+/// server/network failures (e.g. a GitHub 500). On failure git's stderr is
+/// scrubbed of the token (defense-in-depth) before being surfaced or matched.
 fn push_branches(
     token: &str,
     owner: &str,
@@ -294,18 +321,31 @@ fn push_branches(
     repo_path: &Path,
     branches: &[String],
 ) -> Result<()> {
-    let out = push_command(token, owner, repo_name, repo_path, branches)
-        .output()
-        .map_err(|e| anyhow!("spawning git push to github.com/{owner}/{repo_name}: {e}"))?;
-    if !out.status.success() {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt = 1;
+    loop {
+        let out = push_command(token, owner, repo_name, repo_path, branches)
+            .output()
+            .map_err(|e| anyhow!("spawning git push to github.com/{owner}/{repo_name}: {e}"))?;
+        if out.status.success() {
+            return Ok(());
+        }
         let stderr = String::from_utf8_lossy(&out.stderr);
         let scrubbed = scrub_token(&stderr, token);
+        if attempt < MAX_ATTEMPTS && is_transient_push_error(&scrubbed) {
+            eprintln!(
+                "⚠ mirror push to github.com/{owner}/{repo_name} hit a transient error \
+                 (attempt {attempt}/{MAX_ATTEMPTS}), retrying in {attempt}s…"
+            );
+            std::thread::sleep(std::time::Duration::from_secs(attempt as u64));
+            attempt += 1;
+            continue;
+        }
         bail!(
             "git push to github.com/{owner}/{repo_name} failed: {}",
             scrubbed.trim()
         );
     }
-    Ok(())
 }
 
 /// Mirror `branches` of the bare repo at `repo_path` to `github.com/{owner}/{repo_name}`,
@@ -495,5 +535,41 @@ mod tests {
         .unwrap_err();
         let msg = format!("{err:#}");
         assert!(!msg.contains(TOKEN), "token leaked in push error: {msg}");
+    }
+
+    #[test]
+    fn transient_push_error_matches_github_500() {
+        // The exact shape of the GitHub 500 we hit — note it says "rejected",
+        // so the match must key off the 5xx text, not "rejected".
+        let stderr = "remote: Internal Server Error\n \
+                      ! [remote rejected] main -> main (Internal Server Error)";
+        assert!(is_transient_push_error(stderr));
+    }
+
+    #[test]
+    fn transient_push_error_matches_5xx_and_network() {
+        for s in [
+            "error: RPC failed; HTTP 502 curl 22",
+            "The requested URL returned error: 503",
+            "fatal: unable to access '...': Could not resolve host: github.com",
+            "Failed to connect to github.com port 443: Connection timed out",
+            "GnuTLS recv error (-54): Error in the pull function.",
+        ] {
+            assert!(is_transient_push_error(s), "should be transient: {s}");
+        }
+    }
+
+    #[test]
+    fn non_transient_push_errors_do_not_retry() {
+        // Auth, 404, and non-fast-forward must fail fast — retrying can't fix
+        // them, and a 404/non-ff must never be mistaken for the 500 case.
+        for s in [
+            "remote: Support for password authentication was removed.\nfatal: Authentication failed",
+            "remote: Repository not found.\nfatal: repository not found",
+            "! [rejected] main -> main (non-fast-forward)\nUpdates were rejected because the tip is behind",
+            "error: failed to push some refs",
+        ] {
+            assert!(!is_transient_push_error(s), "should NOT be transient: {s}");
+        }
     }
 }
