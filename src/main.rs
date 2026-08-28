@@ -77,6 +77,19 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         to: Vec<String>,
     },
+    /// Push a new git-ark binary to a host (or every host, with `--all`) over
+    /// the control channel and re-verify it with `selfcheck` — no logging
+    /// into the box.
+    Upgrade {
+        /// Name of the host to upgrade (from `host add`). Omit with `--all`.
+        host: Option<String>,
+        /// Upgrade every registered host instead of a single named one.
+        #[arg(long)]
+        all: bool,
+        /// Path to the git-ark binary built for the target host's triple.
+        #[arg(long)]
+        binary: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -414,6 +427,10 @@ fn real_main() -> Result<()> {
                 anyhow::bail!("--to <names> is required (comma-separated host names)");
             }
             hostcmd::route(&repo, &to)
+        }
+        Cmd::Upgrade { host, all, binary } => {
+            let hosts: Vec<String> = host.into_iter().collect();
+            hostcmd::upgrade(&hosts, all, &binary)
         }
         Cmd::Restore {
             repo,

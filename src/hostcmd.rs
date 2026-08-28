@@ -806,6 +806,105 @@ pub fn status() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------
+// upgrade — push a new binary to a host (or all) from the client
+// ---------------------------------------------------------------------
+
+/// Resolve which hosts `upgrade` targets. `all` wins outright — every
+/// registered host, bailing on an empty registry (nothing to upgrade) —
+/// without even looking at `names`, so a stray unknown name alongside
+/// `--all` never turns a fleet-wide upgrade into an error. Absent `all`,
+/// explicit `names` must each resolve to a registered host (bailing on the
+/// first that doesn't); naming neither is an error, not a silent no-op.
+fn resolve_upgrade_targets(registry: &Registry, names: &[String], all: bool) -> Result<Vec<Host>> {
+    if all {
+        if registry.list().is_empty() {
+            bail!("no hosts registered — nothing to upgrade");
+        }
+        return Ok(registry.list().to_vec());
+    }
+    if names.is_empty() {
+        bail!("name a host or pass --all");
+    }
+    names
+        .iter()
+        .map(|name| {
+            registry
+                .list()
+                .iter()
+                .find(|h| &h.name == name)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no such host: {name} (run `git-ark host list` to see registered hosts)"
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Stream `bytes` to `host`'s binary path and re-verify with its own
+/// `selfcheck`, printing the version it now reports. Split out of `upgrade`
+/// so a per-host failure can be caught there with `?` and reported without
+/// aborting the rest of the fleet.
+fn upgrade_one(host: &Host, bytes: &[u8]) -> Result<()> {
+    let (user, hostname) = parse_target(&host.ssh_target)?;
+    let spec = SshSpec {
+        user,
+        host: hostname,
+        port: Some(host.port),
+        identity: host.identity.clone(),
+    };
+    ssh_pipe_file(
+        &spec,
+        &format!("{}/bin/git-ark", host.install_dir),
+        bytes,
+        0o755,
+    )?;
+    let out = ssh_run(&spec, &selfcheck_command(&host.install_dir))?;
+    let kv = parse_kv(&out);
+    let version = kv.get("git_ark_version").cloned().unwrap_or_default();
+    println!("✓ {} upgraded → {version}", host.name);
+    Ok(())
+}
+
+/// Push `binary` to `names` (or every registered host, with `all`) over the
+/// control channel and re-verify each with `selfcheck`. The binary is read
+/// once and streamed unchanged to every target. A per-host failure is
+/// printed and does not abort the rest — the fleet-wide `--all` case must
+/// finish attempting every host before this returns a non-zero error, so a
+/// script driving it can detect a partial upgrade without losing the hosts
+/// that did succeed.
+pub fn upgrade(names: &[String], all: bool, binary: &Path) -> Result<()> {
+    let registry = Registry::load(&registry_path()?)?;
+    let targets = resolve_upgrade_targets(&registry, names, all)?;
+
+    let bytes =
+        std::fs::read(binary).with_context(|| format!("reading --binary {}", binary.display()))?;
+    let binary_name = binary.to_string_lossy();
+
+    let mut any_failed = false;
+    for host in &targets {
+        if !binary_name.contains(&host.triple) {
+            eprintln!(
+                "⚠ --binary {} doesn't look like it's built for {}'s triple ({}) — continuing anyway",
+                binary.display(),
+                host.name,
+                host.triple
+            );
+        }
+        if let Err(e) = upgrade_one(host, &bytes) {
+            println!("✗ {}: {e}", host.name);
+            any_failed = true;
+        }
+    }
+
+    if any_failed {
+        bail!("one or more hosts failed to upgrade — see above");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // mirror designation
 // ---------------------------------------------------------------------
 
@@ -1762,5 +1861,71 @@ mod tests {
         );
         let out = format_check(&c, "acme", "app");
         assert!(out.contains("⚠ repo ships workflows"));
+    }
+
+    // -----------------------------------------------------------------
+    // upgrade
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn resolve_upgrade_targets_all_returns_every_host() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+        registry.upsert(test_host("ec2", true));
+
+        let targets = resolve_upgrade_targets(&registry, &[], true).unwrap();
+        let mut names: Vec<&str> = targets.iter().map(|h| h.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["ec2", "nas"]);
+    }
+
+    #[test]
+    fn resolve_upgrade_targets_all_bails_on_empty_registry() {
+        let registry = Registry::default();
+        assert!(resolve_upgrade_targets(&registry, &[], true).is_err());
+    }
+
+    #[test]
+    fn resolve_upgrade_targets_named_returns_those_hosts() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+        registry.upsert(test_host("ec2", true));
+
+        let names = vec!["ec2".to_string()];
+        let targets = resolve_upgrade_targets(&registry, &names, false).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "ec2");
+    }
+
+    #[test]
+    fn resolve_upgrade_targets_bails_on_unknown_name() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+
+        let names = vec!["nope".to_string()];
+        let err = resolve_upgrade_targets(&registry, &names, false).unwrap_err();
+        assert!(err.to_string().contains("nope"));
+    }
+
+    #[test]
+    fn resolve_upgrade_targets_bails_when_neither_all_nor_names() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+
+        let err = resolve_upgrade_targets(&registry, &[], false).unwrap_err();
+        assert!(err.to_string().contains("--all"));
+    }
+
+    #[test]
+    fn resolve_upgrade_targets_all_wins_over_names() {
+        let mut registry = Registry::default();
+        registry.upsert(test_host("nas", false));
+        registry.upsert(test_host("ec2", true));
+
+        // An unknown name would normally bail — proves `all` short-circuits
+        // past name resolution entirely rather than validating both.
+        let names = vec!["nope".to_string()];
+        let targets = resolve_upgrade_targets(&registry, &names, true).unwrap();
+        assert_eq!(targets.len(), 2);
     }
 }
