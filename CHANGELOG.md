@@ -4,6 +4,15 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-08-27
+
+### Fixed
+- The GitHub mirror push now retries (up to 3×, short backoff) on transient
+  server or network failures — a GitHub 500 (which arrives as
+  `[remote rejected] … (Internal Server Error)`), an RPC HTTP 5xx, or a
+  connection error — instead of failing the mirror on a blip. Auth failures,
+  404s, and non-fast-forward rejections still fail fast.
+
 ## [0.3.0] — 2026-08-27
 
 ### Added
