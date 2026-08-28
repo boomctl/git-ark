@@ -1,4 +1,12 @@
-# Building and deploying git-ark
+# Building and deploying git-ark (the by-hand path)
+
+> **You usually don't need this.** `git-ark host add <name> <ssh-target>` does
+> everything below — probe, ship the binary, install the forced-command key,
+> write config + the write-only secret, verify — from your machine in one
+> command. See the [README quickstart](../README.md#quick-start). This document
+> is the manual path `host add` automates, kept for reference and debugging, plus
+> the one thing that's still by hand: **building the binary** (step 1) and the
+> **restore** procedure (which never runs on the host).
 
 `git-ark` runs as an SSH forced command on the host, so it needs a static,
 dependency-free binary for the host's architecture. This doc covers building
