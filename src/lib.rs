@@ -18,6 +18,7 @@ pub mod scan;
 /// (restore and, ahead, the control-plane commands).
 #[cfg(unix)]
 pub mod shell;
+pub mod sshdiag;
 pub mod store;
 pub mod subnet;
 

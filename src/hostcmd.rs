@@ -17,6 +17,7 @@ use crate::hostspec::{
 };
 use crate::registry::{Host, Registry};
 use crate::repo_policy::read_repo_policy;
+use crate::sshdiag::{classify_ssh_error, diagnosis_message, SshDiagnosis};
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -401,8 +402,20 @@ pub fn host_add(args: &HostAddArgs) -> Result<()> {
 
     // 1. Probe + capability check. Nothing is written to the host until this
     // passes — a red probe leaves the box exactly as found.
-    let probe_out =
-        ssh_run(&spec, PROBE_SCRIPT).with_context(|| format!("probing {}", spec.display()))?;
+    let probe_out = ssh_run(&spec, PROBE_SCRIPT)
+        .inspect_err(|e| {
+            // Diagnosis is a side note on the way to the same error, not a
+            // replacement for it — `Other` prints nothing rather than
+            // fabricate advice for an unrecognized failure.
+            let diagnosis = classify_ssh_error(&e.to_string());
+            if diagnosis != SshDiagnosis::Other {
+                eprintln!(
+                    "{}",
+                    diagnosis_message(diagnosis, &spec.display(), args.port.unwrap_or(22))
+                );
+            }
+        })
+        .with_context(|| format!("probing {}", spec.display()))?;
     let facts = parse_probe(&probe_out);
     let plan = match assess(&facts) {
         Ok(plan) => plan,
