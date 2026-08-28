@@ -4,6 +4,20 @@ All notable changes to `git-ark` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-08-27
+
+### Added
+- `host add` and `upgrade` **auto-fetch the matching host binary** from the
+  release for this client's version and verify it against the release
+  `SHA256SUMS` — no `--binary`, and no toolchain on either the client or the
+  host. `--binary` remains as an override for air-gapped or custom builds, and
+  `GIT_ARK_RELEASE_REPO` overrides the source repo for forks.
+
+### Changed
+- Quick start no longer cross-compiles a host binary — `host add` fetches it.
+- `install.sh` is wrapped in `main()`, so a truncated `curl | sh` can never run
+  a partial script, and `GIT_ARK_VERSION` accepts either `0.3.0` or `v0.3.0`.
+
 ## [0.2.0] — 2026-08-27
 
 The **client control plane**. git-ark is now driven entirely from your own
