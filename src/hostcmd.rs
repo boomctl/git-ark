@@ -323,6 +323,63 @@ pub fn remove_ssh_config_block(existing: &str, name: &str) -> String {
     out
 }
 
+/// The best `~/.ssh/config` alias that already reaches (`host`, `user`), for
+/// recording as a host's push alias during adopt. Scans every `Host` stanza
+/// (not just git-ark ones); a stanza matches when its `HostName` equals `host`
+/// and, when `user` is given, its `User` equals `user` (a stanza with no `User`
+/// line still matches — ssh falls through to the command-line user). Among the
+/// matching stanzas' aliases, prefers an exact `git-ark-<name>`, then the first
+/// beginning `git-ark`, then the first alias seen. `None` if nothing matches.
+fn find_alias_for_target(
+    ssh_config: &str,
+    host: &str,
+    user: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    let lines: Vec<&str> = ssh_config.lines().collect();
+    let mut candidates: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let mut head = lines[i].split_whitespace();
+        if !matches!(head.next(), Some(k) if k.eq_ignore_ascii_case("Host")) {
+            i += 1;
+            continue;
+        }
+        let aliases: Vec<String> = head.map(|s| s.to_string()).collect();
+        // Read the stanza body (until the next Host/Match) for HostName / User.
+        i += 1;
+        let mut hostname: Option<&str> = None;
+        let mut block_user: Option<&str> = None;
+        while i < lines.len() {
+            let mut bt = lines[i].split_whitespace();
+            match bt.next() {
+                Some(k) if k.eq_ignore_ascii_case("Host") || k.eq_ignore_ascii_case("Match") => {
+                    break
+                }
+                Some(k) if k.eq_ignore_ascii_case("HostName") => hostname = bt.next(),
+                Some(k) if k.eq_ignore_ascii_case("User") => block_user = bt.next(),
+                _ => {}
+            }
+            i += 1;
+        }
+        let host_matches = hostname == Some(host);
+        let user_matches = match (user, block_user) {
+            (None, _) | (Some(_), None) => true,
+            (Some(u), Some(bu)) => u == bu,
+        };
+        if host_matches && user_matches {
+            candidates.extend(aliases);
+        }
+    }
+    let exact = format!("git-ark-{name}");
+    candidates
+        .iter()
+        .find(|a| **a == exact)
+        .or_else(|| candidates.iter().find(|a| a.starts_with("git-ark")))
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
 /// Parse `key=value` lines (probe/selfcheck output shape) into a lookup map.
 fn parse_kv(text: &str) -> std::collections::HashMap<String, String> {
     text.lines()
@@ -652,6 +709,9 @@ pub struct HostAdoptArgs {
     /// Path to the host's `config.toml`; if omitted, adopt reads it from the
     /// git-ark forced-command line in the host's `authorized_keys`.
     pub config: Option<String>,
+    /// The push alias to record, overriding discovery. Use when `~/.ssh/config`
+    /// has several stanzas for this target, or none and you want to name it.
+    pub push_alias: Option<String>,
 }
 
 /// Adopt an already-deployed host into the client registry — the recovery path
@@ -729,7 +789,18 @@ pub fn host_adopt(args: &HostAdoptArgs) -> Result<()> {
         .cloned()
         .unwrap_or_else(|| "?".into());
 
-    // 5. Register — the ONLY thing written. No ssh alias, no host mutation.
+    // 5. Discover the push alias — an explicit --push-alias wins; else read the
+    //    client's own ~/.ssh/config (still touching nothing) for a stanza that
+    //    already reaches this target. `None` if there's nothing to discover:
+    //    status/upgrade still work; push/route need an alias set later.
+    let push_alias = args.push_alias.clone().or_else(|| {
+        client_ssh_config_path()
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|cfg| find_alias_for_target(&cfg, &spec.host, Some(&spec.user), &args.name))
+    });
+
+    // 6. Register — the ONLY thing written. No ssh alias, no host mutation.
     let registry_path = registry_path()?;
     let mut registry = Registry::load(&registry_path)?;
     registry.upsert(Host {
@@ -745,7 +816,7 @@ pub fn host_adopt(args: &HostAdoptArgs) -> Result<()> {
         prefix,
         endpoint,
         mirror,
-        push_alias: None, // A4 replaces this with the alias discovered from ~/.ssh/config
+        push_alias: push_alias.clone(),
     });
     registry.save(&registry_path)?;
 
@@ -757,6 +828,14 @@ pub fn host_adopt(args: &HostAdoptArgs) -> Result<()> {
     println!("  it now appears in `git-ark status` and can be `git-ark upgrade`d.");
     if mirror {
         println!("  (it holds the GitHub mirror.)");
+    }
+    match &push_alias {
+        Some(alias) => println!("  push alias: {alias} — `git-ark route` and pushes will use it."),
+        None => println!(
+            "  no push alias found in ~/.ssh/config — status/upgrade work; set one with \
+             `git-ark host adopt {} {} --push-alias <alias>` to enable push/route.",
+            args.name, args.target
+        ),
     }
     Ok(())
 }
@@ -1706,6 +1785,65 @@ mod tests {
     fn parse_target_rejects_empty_user_or_host() {
         assert!(parse_target("@example.com").is_err());
         assert!(parse_target("ark@").is_err());
+    }
+
+    #[test]
+    fn find_alias_discovers_the_nas_style_manual_block() {
+        // The exact shape of git-ark's own hand-wired NAS.
+        let cfg = "Host git-ark\n  HostName store.lan\n  User pfugate\n  \
+                   IdentityFile ~/.ssh/git-ark\n  IdentitiesOnly yes\n";
+        assert_eq!(
+            find_alias_for_target(cfg, "store.lan", Some("pfugate"), "nas"),
+            Some("git-ark".to_string())
+        );
+    }
+
+    #[test]
+    fn find_alias_prefers_exact_name_then_git_ark_then_first() {
+        // Two stanzas reach the same target; exact git-ark-<name> wins.
+        let cfg = "Host git-ark\n  HostName store.lan\n  User pfugate\n\n\
+                   Host git-ark-nas\n  HostName store.lan\n  User pfugate\n";
+        assert_eq!(
+            find_alias_for_target(cfg, "store.lan", Some("pfugate"), "nas"),
+            Some("git-ark-nas".to_string())
+        );
+        // With no exact match, the first git-ark* alias wins over a plain one.
+        let cfg2 = "Host box\n  HostName store.lan\n  User pfugate\n\n\
+                    Host git-ark\n  HostName store.lan\n  User pfugate\n";
+        assert_eq!(
+            find_alias_for_target(cfg2, "store.lan", Some("pfugate"), "nas"),
+            Some("git-ark".to_string())
+        );
+    }
+
+    #[test]
+    fn find_alias_filters_by_user_but_tolerates_a_userless_stanza() {
+        let cfg = "Host wrong\n  HostName store.lan\n  User someoneelse\n\n\
+                   Host right\n  HostName store.lan\n";
+        // The wrong-user stanza is rejected; the User-less one matches.
+        assert_eq!(
+            find_alias_for_target(cfg, "store.lan", Some("pfugate"), "nas"),
+            Some("right".to_string())
+        );
+    }
+
+    #[test]
+    fn find_alias_none_when_no_stanza_reaches_the_target() {
+        let cfg = "Host other\n  HostName elsewhere.example\n  User pfugate\n";
+        assert_eq!(
+            find_alias_for_target(cfg, "store.lan", Some("pfugate"), "nas"),
+            None
+        );
+    }
+
+    #[test]
+    fn find_alias_handles_multiple_aliases_on_one_host_line() {
+        // `Host a b` declares two aliases for one stanza; a git-ark* one wins.
+        let cfg = "Host shorty git-ark-nas\n  HostName store.lan\n  User pfugate\n";
+        assert_eq!(
+            find_alias_for_target(cfg, "store.lan", Some("pfugate"), "nas"),
+            Some("git-ark-nas".to_string())
+        );
     }
 
     #[test]

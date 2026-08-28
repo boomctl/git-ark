@@ -193,6 +193,10 @@ enum HostAction {
         /// line in authorized_keys when omitted.
         #[arg(long)]
         config: Option<String>,
+        /// Record this push alias instead of discovering one from ~/.ssh/config.
+        /// Use when the config has several stanzas for the target, or none.
+        #[arg(long)]
+        push_alias: Option<String>,
     },
 }
 
@@ -503,12 +507,14 @@ fn real_main() -> Result<()> {
                 port,
                 identity,
                 config,
+                push_alias,
             } => hostcmd::host_adopt(&hostcmd::HostAdoptArgs {
                 name,
                 target,
                 port,
                 identity,
                 config,
+                push_alias,
             }),
         },
         Cmd::Mirror { action } => match action {
