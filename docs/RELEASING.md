@@ -40,9 +40,16 @@ triggers the release workflow — no `workflow_dispatch`, no manual upload.
 
 ## After the release
 
-- **Bump the tap checksums** to the new version: update `Formula/git-ark.rb`
-  (Homebrew tap) and `bucket/git-ark.json` (Scoop bucket) — version, URLs, and
-  the SHA-256s from the new release's `SHA256SUMS` — and push each tap through
-  git-ark.
+- **Regenerate the tap files** — never paste a checksum by hand:
+
+  ```sh
+  scripts/render-tap-files.sh X.Y.Z
+  ```
+
+  It fetches the release's `SHA256SUMS` and rewrites `Formula/git-ark.rb`
+  (Homebrew) and `bucket/git-ark.json` (Scoop) in the sibling tap repos
+  (`../homebrew-tap`, `../scoop-bucket`), then prints the two
+  `git push git-ark:…` commands to publish them. The tap files are generated —
+  regenerate for a new release rather than editing checksums in place.
 - **Publish to crates.io:** `cargo publish` (crates.io versions are immutable,
   so this always follows a version bump).
