@@ -11,9 +11,21 @@
 # See docs/RELEASING.md.
 set -eu
 
-VERSION="${1:?usage: render-tap-files.sh <version> [brew-dir] [scoop-dir]}"
+DRY=0
+args=""
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY=1 ;;
+    *) args="$args $a" ;;
+  esac
+done
+# shellcheck disable=SC2086
+set -- $args
+
+VERSION="${1:?usage: render-tap-files.sh [--dry-run] <version> [brew-dir] [scoop-dir]}"
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
-VER="${VERSION#v}" # bare version, e.g. 0.4.0
+VER="${VERSION#v}" # bare version, e.g. 0.6.0
+MSG="git-ark $VER"
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) # git-ark repo root
 BREW_DIR="${2:-$here/../homebrew-tap}"
@@ -117,6 +129,27 @@ echo "wrote:"
 echo "  $BREW_DIR/Formula/git-ark.rb"
 echo "  $SCOOP_DIR/bucket/git-ark.json"
 echo
-echo "publish through git-ark:"
-echo "  (cd \"$BREW_DIR\"  && git commit -am \"git-ark $VER\" && git push git-ark:homebrew-tap main)"
-echo "  (cd \"$SCOOP_DIR\" && git commit -am \"git-ark $VER\" && git push git-ark:scoop-bucket main)"
+
+if [ "$DRY" -eq 1 ]; then
+  echo "dry-run — publish through git-ark with:"
+  echo "  (cd \"$BREW_DIR\"  && git commit -am \"$MSG\" && git push git-ark:homebrew-tap main)"
+  echo "  (cd \"$SCOOP_DIR\" && git commit -am \"$MSG\" && git push git-ark:scoop-bucket main)"
+  exit 0
+fi
+
+# Commit + push each tap file through the git-ark vault (which mirrors to GitHub).
+publish() { # <dir> <file-within-repo> <vault-remote>
+  ( cd "$1"
+    git add "$2"
+    if git diff --cached --quiet; then
+      echo "  $3: already at $MSG"
+    else
+      git commit -q -m "$MSG"
+      git push "$3" main
+      echo "  $3: published $MSG"
+    fi )
+}
+
+echo "publishing through git-ark:"
+publish "$BREW_DIR"  "Formula/git-ark.rb"  git-ark:homebrew-tap
+publish "$SCOOP_DIR" "bucket/git-ark.json" git-ark:scoop-bucket
